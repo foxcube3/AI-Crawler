@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jobs</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .muted { color: #666; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+    ul { list-style: none; padding-left: 0; }
+    li { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+    button { padding:6px 10px; border:none; border-radius:6px; background:#0b5ed7; color:#fff; cursor:pointer; margin-right:6px; }
+    button:hover { background:#0949a6; }
+    a.btn { display:inline-block; padding:6px 10px; border-radius:6px; background:#1a7f37; color:#fff; text-decoration:none; margin-right:6px; }
+    a.btn:hover { background:#12662b; }
+    form.inline { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+    label { display:block; margin: 8px 0 4px; }
+    input[type="number"], select, input[type="text"] { padding:6px; border:1px solid #ccc; border-radius:6px; }
+    nav a { margin-right:6px; }
+  </style>
+</head>
+<body>
+  <h1>Jobs</h1>
+
+  <div class="card">
+    <form class="inline" action="/jobs-ui" method="get">
+      <input type="hidden" name="output_dir" value="{{ output_dir or 'data' }}">
+      <div>
+        <label>Status</label>
+        <select name="status">
+          <option value="all" {% if status == "all" %}selected{% endif %}>All</option>
+          <option value="active" {% if status == "active" %}selected{% endif %}>Running</option>
+          <option value="done" {% if status == "done" %}selected{% endif %}>Done</option>
+          <option value="pending" {% if status == "pending" %}selected{% endif %}>Pending</option>
+        </select>
+      </div>
+      <div>
+        <label>Job ID contains</label>
+        <input type="text" name="q" value="{{ q or '' }}" placeholder="substring">
+      </div>
+      <div>
+        <label>Domain</label>
+        <input type="text" name="domain" value="{{ domain or '' }}" placeholder="e.g. arxiv.org">
+      </div>
+      <div>
+        <label>Start</label>
+        <input type="datetime-local" name="start" value="{{ start or '' }}">
+      </div>
+      <div>
+        <label>End</label>
+        <input type="datetime-local" name="end" value="{{ end or '' }}">
+      </div>
+      <div>
+        <label>Page size</label>
+        <input type="number" name="page_size" value="{{ page_size }}" min="1">
+      </div>
+      <div>
+        <label>Page</label>
+        <input type="number" name="page" value="{{ page }}" min="1">
+      </div>
+      <div>
+        <button type="submit">Apply</button>
+      </div>
+      <div>
+        <a class="btn" href="/jobs-ui?output_dir={{ output_dir or 'data' }}">Reset</a>
+        <a class="btn" href="/jobs-csv?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}">Export CSV</a>
+      </div>
+      <div class="muted">Total: {{ total }} — Page {{ page }} / {{ pages }}</div>
+    </form>
+  </div>
+
+  <div class="card">
+    <ul>
+      {% for job in jobs %}
+        {% set s = summaries.get(job.job_id, {}) %}
+        <li>
+          <strong>{{ job.job_id }}</strong> — {{ "Done" if job.done else ("Running" if job.active else "Pending") }} —
+          {{ job.meta.created_at | default("") }}
+          <div class="muted">Total: {{ s.total or 0 }}, OK: {{ s.ok or 0 }}, Errors: {{ s.errors or 0 }}, Avg: {{ (s.avg_ms or 0) | round(2) }} ms</div>
+          {% if job.meta.report_pages %}
+            — Reports:
+            {% for p in job.meta.report_pages %}
+              <a class="btn" target="_blank" href="/reports?output_dir={{ job.meta.output_dir or 'data' }}&file={{ p.split('/')[-1] }}">Open</a>
+            {% endfor %}
+          {% endif %}
+          <div style="margin-top:6px;">
+            <a class="btn" href="/jobs/{{ job.job_id }}/detail" target="_blank">Detail</a>
+            <button onclick="cancelJob('{{ job.job_id }}')">Cancel</button>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+    <nav>
+      {% if page > 1 %}
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
+      {% endif %}
+      {% for p in range(1, pages + 1) %}
+        {% if p == page %}
+          <strong>{{ p }}</strong>
+        {% else %}
+          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if page < pages %}
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </nav>
+  </div>
+
+  <script>
+    async function cancelJob(id) {
+      await fetch("/jobs/" + id, { method: "DELETE" });
+      location.reload();
+    }
+  </script>
+</body>
+</html>

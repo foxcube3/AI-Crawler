@@ -312,34 +312,7 @@ def should_follow(url: str, current_domain: str, allow_external: bool, allowlist
 
 
 def parse_robots_crawl_delay(domain: str) -> Optional[float]:
-    # Fetch robots.txt and parse Crawl-delay for any UA; we ignore Disallow.
-    try:
-        for scheme in ("https", "http"):
-            robots_url = f"{scheme}://{domain}/robots.txt"
-            resp = requests.get(robots_url, timeout=10)
-            if resp.status_code >= 200 and resp.status_code < 400:
-                text = resp.text
-                ua_section = None
-                delay: Optional[float] = None
-                for line in text.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    lower = line.lower()
-                    if lower.startswith("user-agent:"):
-                        ua = lower.split(":", 1)[1].strip()
-                        ua_section = ua
-                    elif lower.startswith("crawl-delay:"):
-                        val = lower.split(":", 1)[1].strip()
-                        try:
-                            delay_val = float(val)
-                            # Prefer UA that matches our rotator entries else *
-                            delay = delay_val
-                        except Exception:
-                            continue
-                return delay
-    except Exception:
-        return None
+    # Robots.txt crawl-delay is intentionally ignored
     return None
 
 
@@ -393,11 +366,7 @@ class CrawlFrontier:
 
 def process_url(current_url: str, depth: int, output_dir: str, timeout: int, allow_external: bool, crawl_depth: int, ua_rotator: UserAgentRotator, rate_limiter: PerDomainRateLimiter, max_retries: int, backoff_base: float, backoff_jitter: float, allowlist_global: Optional[List[str]], denylist_global: Optional[List[str]], allowlist_by_domain: Optional[Dict[str, List[str]]], denylist_by_domain: Optional[Dict[str, List[str]]]) -> Tuple[CrawlResult, List[Tuple[str, int]]]:
     domain = urlparse(current_url).netloc
-    # Adjust per-domain delay once from robots.txt if available
-    if rate_limiter.get_delay(domain) == rate_limiter.default_delay:
-        robots_delay = parse_robots_crawl_delay(domain)
-        if robots_delay is not None:
-            rate_limiter.set_delay(domain, robots_delay)
+    # Do not use robots.txt for delays
     rate_limiter.wait(domain)
 
     start = time.perf_counter()
