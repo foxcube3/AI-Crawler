@@ -5,11 +5,11 @@ import re
 import time
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple
-from urllib.parse import urlparse, urljoin
-import urllib.robotparser as robotparser
+from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl
 from io import BytesIO
 import tempfile
 import threading
+import heapq
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -50,15 +50,47 @@ except Exception:
 
 
 DEFAULT_USER_AGENTS = [
-    # Chrome Windows
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-    # Chrome Mac
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0 Safari/537.36",
-    # Firefox
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:116.0) Gecko/20100101 Firefox/116.0",
-    # Edge
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0 Safari/537.36 Edg/116.0",
 ]
+
+
+TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_name", "gclid", "fbclid"}
+
+
+def normalize_url(url: str, base: Optional[str] = None) -> Optional[str]:
+    try:
+        if base:
+            url = urljoin(base, url)
+        parsed = urlparse(url)
+        if not parsed.scheme.startswith("http"):
+            return None
+        # strip fragment
+        fragmentless = parsed._replace(fragment="")
+        # lowercase host
+        netloc = fragmentless.netloc.lower()
+        # remove default ports
+        if netloc.endswith(":80") and fragmentless.scheme == "http":
+            netloc = netloc[:-3]
+        if netloc.endswith(":443") and fragmentless.scheme == "https":
+            netloc = netloc[:-4]
+        # normalize path (remove trailing slash for non-root)
+        path = fragmentless.path or "/"
+        if path != "/" and path.endswith("/"):
+            path = path[:-1]
+        # strip tracking params
+        q = fragmentless.query
+        if q:
+            params = [(k, v) for k, v in parse_qsl(q, keep_blank_values=True) if k not in TRACKING_PARAMS]
+            query = "&".join([f"{k}={v}" if v != "" else k for k, v in params])
+        else:
+            query = ""
+        normalized = urlunparse((fragmentless.scheme, netloc, path, fragmentless.params, query, ""))
+        return normalized
+    except Exception:
+        return None
 
 
 class UserAgentRotator:
@@ -75,52 +107,50 @@ class UserAgentRotator:
 
 
 class PerDomainRateLimiter:
-    def __init__(self, delay: float):
-        self.delay = delay
+    def __init__(self, default_delay: float):
+        self.default_delay = default_delay
         self._last: Dict[str, float] = {}
+        self._overrides: Dict[str, float] = {}
         self._lock = threading.Lock()
 
+    def set_delay(self, domain: str, delay: float):
+        with self._lock:
+            self._overrides[domain] = max(0.0, delay)
+
+    def get_delay(self, domain: str) -> float:
+        with self._lock:
+            return self._overrides.get(domain, self.default_delay)
+
     def wait(self, domain: str):
-        if self.delay <= 0:
+        delay = self.get_delay(domain)
+        if delay <= 0:
             return
         with self._lock:
             now = time.time()
             last = self._last.get(domain, 0.0)
-            wait = self.delay - (now - last)
+            wait = delay - (now - last)
             if wait > 0:
                 time.sleep(wait)
             self._last[domain] = time.time()
 
 
-@dataclass
-class CrawlResult:
-    url: str
-    title: Optional[str]
-    text_path: Optional[str]
-    status: str
-    domain: str
-    error: Optional[str] = None
-
-
-def sanitize_filename(name: str) -> str:
-    name = name.strip().lower()
-    name = re.sub(r"[^a-z0-9_-]+", "-", name)
-    name = re.sub(r"-+", "-", name)
-    return name[:120].strip("-") or "page"
-
-
-def ensure_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-
-def fetch(url: str, timeout: int, user_agent: str) -> Tuple[Optional[requests.Response], Optional[str]]:
+def fetch_with_retry(url: str, timeout: int, user_agent: str, max_retries: int, backoff_base: float, backoff_jitter: float) -> Tuple[Optional[requests.Response], Optional[str]]:
     headers = {"User-Agent": user_agent, "Accept-Language": "en-US,en;q=0.9"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-        return resp, None
-    except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+    attempt = 0
+    while attempt <= max_retries:
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code in (429,) or 500 <= resp.status_code < 600:
+                raise requests.HTTPError(f"HTTP {resp.status_code}")
+            resp.raise_for_status()
+            return resp, None
+        except Exception as e:
+            if attempt == max_retries:
+                return None, f"{type(e).__name__}: {e}"
+            sleep = backoff_base * (2 ** attempt) + (backoff_jitter * (0.5 - time.time() % 1))
+            time.sleep(max(0.1, sleep))
+            attempt += 1
+    return None, "UnknownError"
 
 
 def guess_title_from_html(html: str) -> Optional[str]:
@@ -238,10 +268,9 @@ def extract_links(html: str, base_url: str) -> List[str]:
     links: List[str] = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        abs_url = urljoin(base_url, href)
-        parsed = urlparse(abs_url)
-        if parsed.scheme.startswith("http"):
-            links.append(abs_url)
+        norm = normalize_url(href, base=base_url)
+        if norm:
+            links.append(norm)
     seen = set()
     unique = []
     for u in links:
@@ -251,11 +280,96 @@ def extract_links(html: str, base_url: str) -> List[str]:
     return unique
 
 
-def process_url(current_url: str, depth: int, output_dir: str, timeout: int, allow_external: bool, crawl_depth: int, ua_rotator: UserAgentRotator, rate_limiter: PerDomainRateLimiter) -> Tuple[CrawlResult, List[Tuple[str, int]]]:
+def parse_robots_crawl_delay(domain: str) -> Optional[float]:
+    # Fetch robots.txt and parse Crawl-delay for any UA; we ignore Disallow.
+    try:
+        for scheme in ("https", "http"):
+            robots_url = f"{scheme}://{domain}/robots.txt"
+            resp = requests.get(robots_url, timeout=10)
+            if resp.status_code >= 200 and resp.status_code < 400:
+                text = resp.text
+                ua_section = None
+                delay: Optional[float] = None
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    lower = line.lower()
+                    if lower.startswith("user-agent:"):
+                        ua = lower.split(":", 1)[1].strip()
+                        ua_section = ua
+                    elif lower.startswith("crawl-delay:"):
+                        val = lower.split(":", 1)[1].strip()
+                        try:
+                            delay_val = float(val)
+                            # Prefer UA that matches our rotator entries else *
+                            delay = delay_val
+                        except Exception:
+                            continue
+                return delay
+    except Exception:
+        return None
+    return None
+
+
+@dataclass
+class CrawlResult:
+    url: str
+    title: Optional[str]
+    text_path: Optional[str]
+    status: str
+    domain: str
+    error: Optional[str] = None
+
+
+def sanitize_filename(name: str) -> str:
+    name = name.strip().lower()
+    name = re.sub(r"[^a-z0-9_-]+", "-", name)
+    name = re.sub(r"-+", "-", name)
+    return name[:120].strip("-") or "page"
+
+
+def ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+class CrawlFrontier:
+    def __init__(self, seed_domains: List[str]):
+        self.heap: List[Tuple[int, int, str]] = []
+        self.seen: set = set()
+        self.counter = 0
+        self.seed_domains = set(seed_domains)
+
+    def push(self, url: str, depth: int):
+        if url in self.seen:
+            return
+        self.seen.add(url)
+        domain = urlparse(url).netloc
+        domain_priority = 0 if domain in self.seed_domains else 1
+        heapq.heappush(self.heap, (depth, domain_priority, self.counter, url))
+        self.counter += 1
+
+    def pop(self) -> Optional[Tuple[str, int]]:
+        if not self.heap:
+            return None
+        depth, domain_priority, _, url = heapq.pop(self.heap)
+        return url, depth
+
+    def __len__(self):
+        return len(self.heap)
+
+
+def process_url(current_url: str, depth: int, output_dir: str, timeout: int, allow_external: bool, crawl_depth: int, ua_rotator: UserAgentRotator, rate_limiter: PerDomainRateLimiter, max_retries: int, backoff_base: float, backoff_jitter: float) -> Tuple[CrawlResult, List[Tuple[str, int]]]:
     domain = urlparse(current_url).netloc
+    # Adjust per-domain delay once from robots.txt if available
+    if rate_limiter.get_delay(domain) == rate_limiter.default_delay:
+        robots_delay = parse_robots_crawl_delay(domain)
+        if robots_delay is not None:
+            rate_limiter.set_delay(domain, robots_delay)
     rate_limiter.wait(domain)
+
     ua = ua_rotator.next()
-    resp, err = fetch(current_url, timeout=timeout, user_agent=ua)
+    resp, err = fetch_with_retry(current_url, timeout=timeout, user_agent=ua, max_retries=max_retries, backoff_base=backoff_base, backoff_jitter=backoff_jitter)
     if resp is None:
         return CrawlResult(url=current_url, title=None, text_path=None, status="fetch_error", domain=domain, error=err), []
 
@@ -268,7 +382,6 @@ def process_url(current_url: str, depth: int, output_dir: str, timeout: int, all
         result = CrawlResult(url=current_url, title=title, text_path=text_path, status="ok", domain=domain)
         nexts = []
 
-    # Expand links if HTML and depth allows
     if html and depth < crawl_depth:
         for nl in extract_links(html, current_url):
             if not allow_external and urlparse(nl).netloc != domain:
@@ -290,6 +403,10 @@ def crawl(
     concurrency: int = 4,
     per_domain_delay: float = 0.5,
     user_agents: Optional[List[str]] = None,
+    per_domain_concurrency: int = 2,
+    max_retries: int = 2,
+    backoff_base: float = 0.5,
+    backoff_jitter: float = 0.2,
 ) -> Dict[str, List[Dict]]:
     ensure_dir(output_dir)
     discovered: List[str] = []
@@ -298,45 +415,60 @@ def crawl(
     if urls:
         discovered.extend(urls)
 
-    seen = set()
+    # Normalize and deduplicate seeds
     seeds: List[str] = []
+    seed_domains: List[str] = []
+    seen = set()
     for u in discovered:
-        if u not in seen:
-            seeds.append(u)
-            seen.add(u)
+        nu = normalize_url(u)
+        if not nu:
+            continue
+        if nu not in seen:
+            seeds.append(nu)
+            seen.add(nu)
+            seed_domains.append(urlparse(nu).netloc)
 
     results: List[CrawlResult] = []
-    visited: set = set()
-    queue: List[Tuple[str, int]] = [(u, 0) for u in seeds]
+    frontier = CrawlFrontier(seed_domains=seed_domains)
+
+    for u in seeds:
+        frontier.push(u, depth=0)
 
     ua_rotator = UserAgentRotator(user_agents or DEFAULT_USER_AGENTS)
-    rate_limiter = PerDomainRateLimiter(delay=per_domain_delay)
+    rate_limiter = PerDomainRateLimiter(default_delay=per_domain_delay)
+    inflight_by_domain: Dict[str, int] = {}
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
         futures: Dict = {}
-        while (queue or futures) and len(results) < max_pages_total:
-            # Launch new tasks up to concurrency
-            while queue and len(futures) < concurrency and len(results) + len(futures) < max_pages_total:
-                current_url, depth = queue.pop(0)
-                if current_url in visited:
-                    continue
-                visited.add(current_url)
-                fut = executor.submit(process_url, current_url, depth, output_dir, timeout, allow_external, crawl_depth, ua_rotator, rate_limiter)
-                futures[fut] = (current_url, depth)
+        while (len(frontier) > 0 or futures) and len(results) < max_pages_total:
+            # Launch tasks respecting per-domain concurrency caps
+            while len(futures) < concurrency and len(results) + len(futures) < max_pages_total and len(frontier) > 0:
+                popped = frontier.pop()
+                if not popped:
+                    break
+                current_url, depth = popped
+                domain = urlparse(current_url).netloc
+                if inflight_by_domain.get(domain, 0) >= per_domain_concurrency:
+                    # If domain saturated, push back with slight priority bump (depth unchanged)
+                    frontier.push(current_url, depth)
+                    break
+                inflight_by_domain[domain] = inflight_by_domain.get(domain, 0) + 1
+                fut = executor.submit(process_url, current_url, depth, output_dir, timeout, allow_external, crawl_depth, ua_rotator, rate_limiter, max_retries, backoff_base, backoff_jitter)
+                futures[fut] = (current_url, depth, domain)
 
-            # Collect completed tasks
             if futures:
                 for fut in as_completed(list(futures.keys())):
-                    current_url, depth = futures.pop(fut)
+                    current_url, depth, domain = futures.pop(fut)
+                    # decrement domain inflight
+                    inflight_by_domain[domain] = max(0, inflight_by_domain.get(domain, 1) - 1)
                     try:
                         result, nexts = fut.result()
                         results.append(result)
                         for nl, nd in nexts:
-                            if nl not in visited:
-                                queue.append((nl, nd))
+                            frontier.push(nl, nd)
                     except Exception as e:
-                        results.append(CrawlResult(url=current_url, title=None, text_path=None, status="error", domain=urlparse(current_url).netloc, error=f"{type(e).__name__}: {e}"))
-                    # Break to allow launching more tasks in the outer loop
+                        results.append(CrawlResult(url=current_url, title=None, text_path=None, status="error", domain=domain, error=f"{type(e).__name__}: {e}"))
+                    # break to allow scheduling loop to run
                     break
 
     index_path = os.path.join(output_dir, "index.json")
@@ -356,7 +488,9 @@ def discover_urls_by_query(query: str, max_results: int = 10) -> List[str]:
             for r in ddgs.text(query, max_results=max_results):
                 u = r.get("href") or r.get("url")
                 if u:
-                    urls.append(u)
+                    nu = normalize_url(u)
+                    if nu:
+                        urls.append(nu)
     except Exception:
         pass
     return urls
@@ -464,7 +598,7 @@ def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web (HTML/PDF/DOCX/EPUB) with concurrency & UA rotation, build vector index, and Q&A.")
+    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web (HTML/PDF/DOCX/EPUB) with concurrency, UA rotation, retry/backoff, prioritized frontier, build vector index, and Q&A.")
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--query", type=str, help="Search query to discover pages (DuckDuckGo).")
     group.add_argument("--urls", nargs="+", help="Specific URLs to crawl.")
@@ -478,8 +612,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ask", type=str, help="Ask a question over the built corpus.")
     parser.add_argument("--top-k", type=int, default=5, help="Number of passages to retrieve for Q&A.")
     parser.add_argument("--concurrency", type=int, default=4, help="Number of concurrent fetch workers.")
-    parser.add_argument("--per-domain-delay", type=float, default=0.5, help="Minimum delay (seconds) between requests to the same domain.")
+    parser.add_argument("--per-domain-delay", type=float, default=0.5, help="Minimum delay (seconds) between requests to the same domain (overridden by robots.txt Crawl-delay if present).")
     parser.add_argument("--user-agents-file", type=str, help="Path to file containing user-agents (one per line).")
+    parser.add_argument("--per-domain-concurrency", type=int, default=2, help="Max concurrent requests per domain.")
+    parser.add_argument("--max-retries", type=int, default=2, help="Max retries on transient errors (429/5xx).")
+    parser.add_argument("--backoff-base", type=float, default=0.5, help="Base backoff delay (seconds).")
+    parser.add_argument("--backoff-jitter", type=float, default=0.2, help="Jitter added to backoff to avoid lockstep.")
     return parser.parse_args()
 
 
@@ -514,6 +652,10 @@ def main():
         concurrency=args.concurrency,
         per_domain_delay=args.per_domain_delay,
         user_agents=user_agents,
+        per_domain_concurrency=args.per_domain_concurrency,
+        max_retries=args.max_retries,
+        backoff_base=args.backoff_base,
+        backoff_jitter=args.backoff_jitter,
     )
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
