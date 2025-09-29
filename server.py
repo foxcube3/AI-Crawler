@@ -266,10 +266,65 @@ def ui():
 
 @app.get("/jobs/{job_id}/detail", response_class=HTMLResponse)
 def job_detail_page(job_id: str):
+    # Build meta and stats server-side
+    # Load meta.json
+    meta = {}
+    outdir = "data"
+    jobs_dir = os.path.join(outdir, "jobs")
+    mpath = os.path.join(jobs_dir, f"{job_id}.meta.json")
+    if os.path.exists(mpath):
+        try:
+            with open(mpath, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+    # Aggregate events from DB
+    stats_labels = []
+    stats_totals = []
+    stats_avgms = []
+    stats_errpct = []
+    try:
+        rows = _db_query("SELECT data_json FROM events WHERE job_id=?", (job_id,))
+        results: List[CrawlResult] = []
+        for (dj,) in rows:
+            try:
+                ev = json.loads(dj)
+                res = ev.get("result")
+                if isinstance(res, dict) and res.get("url"):
+                    results.append(CrawlResult(**res))
+            except Exception:
+                continue
+        stat_map = compute_domain_stats(results) if results else {}
+        stats_labels = list(stat_map.keys())
+        for dom in stats_labels:
+            s = stat_map[dom]
+            stats_totals.append(int(s.get("total", 0)))
+            stats_avgms.append(float(s.get("avg_ms", 0.0)))
+            errs = int(s.get("fetch_error", 0)) + int(s.get("extraction_failed", 0)) + int(s.get("error", 0))
+            total = int(s.get("total", 1))
+            stats_errpct.append(round((errs / total) * 100.0))
+    except Exception:
+        pass
+    # Compute report href
+    report_href = None
+    pages = (meta.get("report_pages") or [])
+    if pages:
+        try:
+            report_href = f"/reports?output_dir={meta.get('output_dir','data')}&file={pages[0].split('/')[-1]}"
+        except Exception:
+            report_href = None
     if env:
         try:
             tmpl = env.get_template("job_detail.html")
-            return tmpl.render(job_id=job_id)
+            return tmpl.render(
+                job_id=job_id,
+                meta=meta,
+                stats_labels=stats_labels,
+                stats_totals=stats_totals,
+                stats_avgms=stats_avgms,
+                stats_errpct=stats_errpct,
+                report_href=report_href,
+            )
         except Exception:
             pass
     return HTMLResponse(f"<h1>Job {job_id}</h1><p>Template not found. Use /jobs/{job_id} for JSON.</p>", status_code=200)
@@ -651,6 +706,19 @@ def list_jobs(output_dir: str = "data"):
             except Exception:
                 continue
     return {"jobs": jobs}
+
+@app.get("/jobs-ui", response_class=HTMLResponse)
+def jobs_ui(output_dir: str = "data"):
+    jobs = list_jobs(output_dir=output_dir).get("jobs", [])
+    if env:
+        try:
+            tmpl = env.get_template("jobs.html")
+            return tmpl.render(jobs=jobs)
+        except Exception:
+            pass
+    # Fallback simple HTML
+    items = "".join(f"<li>{j['job_id']}</li>" for j in jobs)
+    return HTMLResponse(f"<h1>Jobs</h1><ul>{items}</ul>", status_code=200)
 
 @app.get("/jobs/{job_id}")
 def job_detail(job_id: str, output_dir: str = "data"):

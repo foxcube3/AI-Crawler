@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Jobs</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .muted { color: #666; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+    ul { list-style: none; padding-left: 0; }
+    li { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
+    button { padding:6px 10px; border:none; border-radius:6px; background:#0b5ed7; color:#fff; cursor:pointer; margin-right:6px; }
+    button:hover { background:#0949a6; }
+    a.btn { display:inline-block; padding:6px 10px; border-radius:6px; background:#1a7f37; color:#fff; text-decoration:none; margin-right:6px; }
+    a.btn:hover { background:#12662b; }
+  </style>
+</head>
+<body>
+  <h1>Jobs</h1>
+  <div class="card">
+    <ul>
+      {% for job in jobs %}
+        <li>
+          <strong>{{ job.job_id }}</strong> — {{ "Done" if job.done else ("Running" if job.active else "Pending") }} —
+          {{ job.meta.created_at | default("") }}
+          {% if job.meta.report_pages %}
+            — Reports:
+            {% for p in job.meta.report_pages %}
+              <a class="btn" target="_blank" href="/reports?output_dir={{ job.meta.output_dir or 'data' }}&file={{ p.split('/')[-1] }}">Open</a>
+            {% endfor %}
+          {% endif %}
+          <div style="margin-top:6px;">
+            <a class="btn" href="/jobs/{{ job.job_id }}/detail" target="_blank">Detail</a>
+            <button onclick="cancelJob('{{ job.job_id }}')">Cancel</button>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <script>
+    async function cancelJob(id) {
+      await fetch("/jobs/" + id, { method: "DELETE" });
+      location.reload();
+    }
+  </script>
+</body>
+</html>

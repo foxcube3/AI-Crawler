@@ -9,6 +9,10 @@
     .muted { color: #666; }
     .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
     pre { white-space: pre-wrap; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    label { display:block; margin:8px 0 4px; }
+    input[type="text"], textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:6px; }
+    button { padding:8px 12px; border:none; border-radius:6px; background:#0b5ed7; color:#fff; cursor:pointer; }
+    button:hover { background:#0949a6; }
   </style>
 </head>
 <body>
@@ -17,7 +21,7 @@
 
   <div class="card">
     <strong>Metadata</strong>
-    <pre id="meta"></pre>
+    <pre>{{ meta | tojson(indent=2) }}</pre>
   </div>
 
   <div class="card">
@@ -27,70 +31,63 @@
 
   <div class="card">
     <strong>Report</strong>
-    <div id="reports"></div>
+    {% if report_href %}
+      <a href="{{ report_href }}" target="_blank">Open report</a>
+    {% else %}
+      <div class="muted">No report available yet.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <strong>Resume / relaunch with modified parameters</strong>
+    <div class="muted">Edit the JSON below and click "Launch" to start a new job with these parameters.</div>
+    <label>Parameters (JSON)</label>
+    <textarea id="params" rows="10">{{ (meta.params if meta and meta.params else {}) | tojson(indent=2) }}</textarea>
+    <button id="launchBtn">Launch</button>
+    <div id="launchResp" class="muted" style="margin-top:8px;"></div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
-    async function getJSON(url) {
-      const res = await fetch(url);
-      return await res.json();
+    const labels = {{ stats_labels | tojson }};
+    const totals = {{ stats_totals | tojson }};
+    const avgms = {{ stats_avgms | tojson }};
+    const errpct = {{ stats_errpct | tojson }};
+
+    const ctx = document.getElementById("domainChart").getContext("2d");
+    new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          { label: "Total", data: totals, backgroundColor: "#0b5ed7", yAxisID: "y" },
+          { label: "Avg Latency (ms)", data: avgms, type: "line", borderColor: "#ffa726", backgroundColor: "#ffa726", yAxisID: "y1" },
+          { label: "Error Rate (%)", data: errpct, type: "line", borderColor: "#ef5350", backgroundColor: "#ef5350", yAxisID: "y1" },
+        ],
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        scales: {
+          x: { display: true },
+          y: { beginAtZero: true, position: "left", title: { display: true, text: "Total" } },
+          y1: { beginAtZero: true, position: "right", title: { display: true, text: "Latency / Error %" } },
+        },
+      },
+    });
+
+    async function postJSON(url, payload) {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      try { return await res.json(); } catch (e) { return { status: res.status, text: await res.text() }; }
     }
 
-    async function load() {
-      const jobId = "{{ job_id }}";
-      const detail = await getJSON("/jobs/" + jobId);
-      document.getElementById("meta").textContent = JSON.stringify(detail.meta || {}, null, 2);
-
-      const statsResp = await getJSON("/analytics/domain-stats?job_id=" + encodeURIComponent(jobId));
-      const stats = statsResp.stats || {};
-      const labels = Object.keys(stats);
-      const totals = labels.map(d => stats[d].total || 0);
-      const avgms = labels.map(d => Math.round(stats[d].avg_ms || 0));
-      const errpct = labels.map(d => {
-        const s = stats[d];
-        const errs = (s.fetch_error || 0) + (s.extraction_failed || 0) + (s.error || 0);
-        const total = s.total || 1;
-        return Math.round((errs / total) * 100);
-      });
-
-      const ctx = document.getElementById("domainChart").getContext("2d");
-      new Chart(ctx, {
-        type: "bar",
-        data: {
-          labels: labels,
-          datasets: [
-            { label: "Total", data: totals, backgroundColor: "#0b5ed7", yAxisID: "y" },
-            { label: "Avg Latency (ms)", data: avgms, type: "line", borderColor: "#ffa726", backgroundColor: "#ffa726", yAxisID: "y1" },
-            { label: "Error Rate (%)", data: errpct, type: "line", borderColor: "#ef5350", backgroundColor: "#ef5350", yAxisID: "y1" },
-          ],
-        },
-        options: {
-          responsive: false,
-          animation: false,
-          scales: {
-            x: { display: true },
-            y: { beginAtZero: true, position: "left", title: { display: true, text: "Total" } },
-            y1: { beginAtZero: true, position: "right", title: { display: true, text: "Latency / Error %" } },
-          },
-        },
-      });
-
-      const reportsDiv = document.getElementById("reports");
-      const pages = (detail.meta && detail.meta.report_pages) || [];
-      if (pages.length) {
-        const outdir = (detail.meta && detail.meta.output_dir) || "data";
-        const a = document.createElement("a");
-        a.href = "/reports?output_dir=" + encodeURIComponent(outdir) + "&file=" + encodeURIComponent(pages[0].split('/').pop());
-        a.target = "_blank";
-        a.textContent = pages[0].split('/').pop();
-        reportsDiv.appendChild(a);
-      } else {
-        reportsDiv.textContent = "No report available yet.";
-      }
-    }
-
-    load();
+    document.getElementById("launchBtn").addEventListener("click", async () => {
+      const txt = document.getElementById("params").value;
+      let payload = {};
+      try { payload = JSON.parse(txt); } catch (e) { alert("Invalid JSON: " + e); return; }
+      const resp = await postJSON("/jobs", payload);
+      document.getElementById("launchResp").textContent = "Launched job: " + JSON.stringify(resp);
+    });
   </script>
 </body>
 </html>
