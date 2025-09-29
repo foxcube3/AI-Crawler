@@ -36,6 +36,22 @@
         </select>
       </div>
       <div>
+        <label>Job ID contains</label>
+        <input type="text" name="q" value="{{ q or '' }}" placeholder="substring">
+      </div>
+      <div>
+        <label>Domain</label>
+        <input type="text" name="domain" value="{{ domain or '' }}" placeholder="e.g. arxiv.org">
+      </div>
+      <div>
+        <label>Start</label>
+        <input type="datetime-local" name="start" value="{{ start or '' }}">
+      </div>
+      <div>
+        <label>End</label>
+        <input type="datetime-local" name="end" value="{{ end or '' }}">
+      </div>
+      <div>
         <label>Page size</label>
         <input type="number" name="page_size" value="{{ page_size }}" min="1">
       </div>
@@ -71,17 +87,17 @@
     </ul>
     <nav>
       {% if page > 1 %}
-        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
       {% endif %}
       {% for p in range(1, pages + 1) %}
         {% if p == page %}
           <strong>{{ p }}</strong>
         {% else %}
-          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
+          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
         {% endif %}
       {% endfor %}
       {% if page < pages %}
-        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
       {% endif %}
     </nav>
   </div>

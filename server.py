@@ -8,6 +8,7 @@ import time
 import threading
 import sqlite3
 from typing import Optional, List, Dict
+from datetime import datetime
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
 
@@ -708,17 +709,64 @@ def list_jobs(output_dir: str = "data"):
     return {"jobs": jobs}
 
 @app.get("/jobs-ui", response_class=HTMLResponse)
-def jobs_ui(output_dir: str = "data", page: int = 1, page_size: int = 20, status: str = "all"):
+def jobs_ui(
+    output_dir: str = "data",
+    page: int = 1,
+    page_size: int = 20,
+    status: str = "all",
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    domain: Optional[str] = None,
+):
     # Retrieve and filter jobs
     data = list_jobs(output_dir=output_dir)
     jobs = data.get("jobs", [])
     status = (status or "all").lower()
+
+    # Text search
+    q_val = (q or "").strip().lower()
+    if q_val:
+        jobs = [j for j in jobs if q_val in j.get("job_id", "").lower()]
+
+    # Time range filtering (using meta.created_at)
+    def parse_dt(s: Optional[str]) -> Optional[float]:
+        if not s:
+            return None
+        try:
+            # Expect HTML datetime-local format: YYYY-MM-DDTHH:MM
+            return datetime.strptime(s, "%Y-%m-%dT%H:%M").timestamp()
+        except Exception:
+            try:
+                return float(s)
+            except Exception:
+                return None
+
+    start_ts = parse_dt(start)
+    end_ts = parse_dt(end)
+    if start_ts is not None:
+        jobs = [j for j in jobs if float(j.get("meta", {}).get("created_at", 0.0)) >= start_ts]
+    if end_ts is not None:
+        jobs = [j for j in jobs if float(j.get("meta", {}).get("created_at", 0.0)) <= end_ts]
+
+    # Domain filter via events table (if provided)
+    dom = (domain or "").strip().lower()
+    if dom:
+        try:
+            rows = _db_query("SELECT DISTINCT job_id FROM events WHERE data_json LIKE ?", (f'%"domain":"{dom}"%',))
+            allowed_ids = {jid for (jid,) in rows}
+            jobs = [j for j in jobs if j.get("job_id") in allowed_ids]
+        except Exception:
+            jobs = [j for j in jobs if False]  # no match if error
+
+    # Status filter
     if status in {"active", "running"}:
         jobs = [j for j in jobs if j.get("active")]
     elif status in {"done", "completed"}:
         jobs = [j for j in jobs if j.get("done")]
     elif status in {"pending"}:
         jobs = [j for j in jobs if (not j.get("active")) and (not j.get("done"))]
+
     # Sort by created_at desc if available
     try:
         jobs.sort(key=lambda j: float(j.get("meta", {}).get("created_at", 0.0)), reverse=True)
@@ -728,9 +776,9 @@ def jobs_ui(output_dir: str = "data", page: int = 1, page_size: int = 20, status
     page_size = max(1, int(page_size))
     pages = max(1, (total + page_size - 1) // page_size)
     page = max(1, min(int(page), pages))
-    start = (page - 1) * page_size
-    end = min(total, start + page_size)
-    jobs_page = jobs[start:end]
+    start_idx = (page - 1) * page_size
+    end_idx = min(total, start_idx + page_size)
+    jobs_page = jobs[start_idx:end_idx]
     if env:
         try:
             tmpl = env.get_template("jobs.html")
@@ -742,6 +790,10 @@ def jobs_ui(output_dir: str = "data", page: int = 1, page_size: int = 20, status
                 page_size=page_size,
                 status=status,
                 output_dir=output_dir,
+                q=q_val,
+                start=start or "",
+                end=end or "",
+                domain=dom,
             )
         except Exception:
             pass
