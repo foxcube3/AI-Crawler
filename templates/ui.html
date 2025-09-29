@@ -46,10 +46,16 @@
         <input type="number" name="max_retries" value="2">
         <label>Backoff base</label>
         <input type="number" name="backoff_base" value="0.5" step="0.1">
+        <label>Domain delay overrides (JSON: domain -> seconds)</label>
+        <textarea name="domain_delay_overrides" rows="3" placeholder='e.g. {"arxiv.org": 1.0, "pytorch.org": 0.8}'></textarea>
         <label>Allowlist patterns (regex, one per line)</label>
-        <textarea name="allowlist_patterns" rows="4" placeholder="e.g.\n^https?://(www\\.)?arxiv.org/\nblog"></textarea>
+        <textarea name="allowlist_patterns" rows="4" placeholder="e.g.
+^https?://(www\.)?arxiv.org/
+blog"></textarea>
         <label>Denylist patterns (regex, one per line)</label>
-        <textarea name="denylist_patterns" rows="4" placeholder="e.g.\nlogout\n\\?replytocom="></textarea>
+        <textarea name="denylist_patterns" rows="4" placeholder="e.g.
+logout
+\?replytocom="></textarea>
         <label>Per-domain allowlist (JSON mapping domain -> [patterns])</label>
         <textarea name="allowlist_by_domain" rows="3" placeholder='e.g. {"arxiv.org": ["^https?://arxiv.org/abs/"]}'></textarea>
         <label>Per-domain denylist (JSON mapping domain -> [patterns])</label>
@@ -146,7 +152,7 @@
           data[key] = value.trim().split(/\s+/);
         } else if (key === "allowlist_patterns" || key === "denylist_patterns") {
           data[key] = value.split("\n").map(s => s.trim()).filter(Boolean);
-        } else if (key === "allowlist_by_domain" || key === "denylist_by_domain") {
+        } else if (key === "allowlist_by_domain" || key === "denylist_by_domain" || key === "domain_delay_overrides") {
           try {
             data[key] = value.trim() ? JSON.parse(value) : null;
           } catch (e) {

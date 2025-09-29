@@ -44,6 +44,7 @@ class CrawlRequest(BaseModel):
     denylist_patterns: Optional[List[str]] = None
     allowlist_by_domain: Optional[Dict[str, List[str]]] = None
     denylist_by_domain: Optional[Dict[str, List[str]]] = None
+    domain_delay_overrides: Optional[Dict[str, float]] = None
 
 class AskRequest(BaseModel):
     output_dir: str = "data"
@@ -91,6 +92,7 @@ def api_crawl(req: CrawlRequest):
         denylist_patterns=req.denylist_patterns,
         allowlist_by_domain=req.allowlist_by_domain,
         denylist_by_domain=req.denylist_by_domain,
+        domain_delay_overrides=req.domain_delay_overrides,
     )
     return res
 
@@ -195,6 +197,18 @@ def create_job(req: CrawlRequest):
     jobs_dir = os.path.join(outdir, "jobs")
     os.makedirs(jobs_dir, exist_ok=True)
     events_path = os.path.join(jobs_dir, f"{job_id}.jsonl")
+    meta_path = os.path.join(jobs_dir, f"{job_id}.meta.json")
+    # Persist job metadata
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "job_id": job_id,
+                "created_at": time.time(),
+                "params": req.dict(),
+                "output_dir": outdir,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
     def progress(event: Dict):
         # persist to disk
@@ -237,14 +251,24 @@ def create_job(req: CrawlRequest):
                 allowlist_by_domain=req.allowlist_by_domain,
                 denylist_by_domain=req.denylist_by_domain,
                 should_stop=should_stop,
+                domain_delay_overrides=req.domain_delay_overrides,
             )
         finally:
             done["value"] = True
+            # Update metadata with completion time
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                meta["completed_at"] = time.time()
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
             q.put({"event": "complete"})
 
     t = threading.Thread(target=run_crawl, daemon=True)
     t.start()
-    JOBS[job_id] = {"queue": q, "done": done, "thread": t, "events_path": events_path, "cancel": cancel, "output_dir": outdir}
+    JOBS[job_id] = {"queue": q, "done": done, "thread": t, "events_path": events_path, "cancel": cancel, "output_dir": outdir, "meta_path": meta_path}
     return {"job_id": job_id}
 
 @app.get("/jobs/{job_id}/stream")
@@ -345,6 +369,8 @@ async def stream_crawl(req: CrawlRequest):
 def job_status(job_id: str):
     job = JOBS.get(job_id)
     if not job:
+        # Try to load metadata only
+        # Search in default data dir
         return {"error": f"job not found: {job_id}"}
     done = job["done"]["value"]
     # Read last event if exists
@@ -355,7 +381,6 @@ def job_status(job_id: str):
             with open(events_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 size = f.tell()
-                # Read last line efficiently
                 chunk = 1024
                 data = b""
                 while size > 0:
@@ -371,7 +396,15 @@ def job_status(job_id: str):
                         break
         except Exception:
             pass
-    return {"done": done, "last_event": last_event}
+    meta = {}
+    meta_path = job.get("meta_path")
+    if meta_path and os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+    return {"done": done, "last_event": last_event, "meta": meta}
 
 @app.delete("/jobs/{job_id}")
 def cancel_job(job_id: str):
@@ -380,6 +413,31 @@ def cancel_job(job_id: str):
         return {"error": f"job not found: {job_id}"}
     job["cancel"]["value"] = True
     return {"job_id": job_id, "cancelled": True}
+
+@app.get("/jobs")
+def list_jobs(output_dir: str = "data"):
+    jobs_dir = os.path.join(output_dir, "jobs")
+    if not os.path.exists(jobs_dir):
+        return {"jobs": []}
+    jobs = []
+    for fn in os.listdir(jobs_dir):
+        if fn.endswith(".meta.json"):
+            path = os.path.join(jobs_dir, fn)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                jid = meta.get("job_id") or fn.split(".")[0]
+                # Determine status
+                active = jid in JOBS
+                done = False
+                if active:
+                    done = JOBS[jid]["done"]["value"]
+                else:
+                    done = bool(meta.get("completed_at"))
+                jobs.append({"job_id": jid, "active": active, "done": done, "meta": meta})
+            except Exception:
+                continue
+    return {"jobs": jobs}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
