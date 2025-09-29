@@ -708,17 +708,46 @@ def list_jobs(output_dir: str = "data"):
     return {"jobs": jobs}
 
 @app.get("/jobs-ui", response_class=HTMLResponse)
-def jobs_ui(output_dir: str = "data"):
-    jobs = list_jobs(output_dir=output_dir).get("jobs", [])
+def jobs_ui(output_dir: str = "data", page: int = 1, page_size: int = 20, status: str = "all"):
+    # Retrieve and filter jobs
+    data = list_jobs(output_dir=output_dir)
+    jobs = data.get("jobs", [])
+    status = (status or "all").lower()
+    if status in {"active", "running"}:
+        jobs = [j for j in jobs if j.get("active")]
+    elif status in {"done", "completed"}:
+        jobs = [j for j in jobs if j.get("done")]
+    elif status in {"pending"}:
+        jobs = [j for j in jobs if (not j.get("active")) and (not j.get("done"))]
+    # Sort by created_at desc if available
+    try:
+        jobs.sort(key=lambda j: float(j.get("meta", {}).get("created_at", 0.0)), reverse=True)
+    except Exception:
+        pass
+    total = len(jobs)
+    page_size = max(1, int(page_size))
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(int(page), pages))
+    start = (page - 1) * page_size
+    end = min(total, start + page_size)
+    jobs_page = jobs[start:end]
     if env:
         try:
             tmpl = env.get_template("jobs.html")
-            return tmpl.render(jobs=jobs)
+            return tmpl.render(
+                jobs=jobs_page,
+                total=total,
+                page=page,
+                pages=pages,
+                page_size=page_size,
+                status=status,
+                output_dir=output_dir,
+            )
         except Exception:
             pass
     # Fallback simple HTML
-    items = "".join(f"<li>{j['job_id']}</li>" for j in jobs)
-    return HTMLResponse(f"<h1>Jobs</h1><ul>{items}</ul>", status_code=200)
+    items = "".join(f"<li>{j['job_id']}</li>" for j in jobs_page)
+    return HTMLResponse(f"<h1>Jobs</h1><p>Total: {total} — Page {page} / {pages}</p><ul>{items}</ul>", status_code=200)
 
 @app.get("/jobs/{job_id}")
 def job_detail(job_id: str, output_dir: str = "data"):

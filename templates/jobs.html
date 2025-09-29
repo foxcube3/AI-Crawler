@@ -14,10 +14,42 @@
     button:hover { background:#0949a6; }
     a.btn { display:inline-block; padding:6px 10px; border-radius:6px; background:#1a7f37; color:#fff; text-decoration:none; margin-right:6px; }
     a.btn:hover { background:#12662b; }
+    form.inline { display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; }
+    label { display:block; margin: 8px 0 4px; }
+    input[type="number"], select, input[type="text"] { padding:6px; border:1px solid #ccc; border-radius:6px; }
+    nav a { margin-right:6px; }
   </style>
 </head>
 <body>
   <h1>Jobs</h1>
+
+  <div class="card">
+    <form class="inline" action="/jobs-ui" method="get">
+      <input type="hidden" name="output_dir" value="{{ output_dir or 'data' }}">
+      <div>
+        <label>Status</label>
+        <select name="status">
+          <option value="all" {% if status == "all" %}selected{% endif %}>All</option>
+          <option value="active" {% if status == "active" %}selected{% endif %}>Running</option>
+          <option value="done" {% if status == "done" %}selected{% endif %}>Done</option>
+          <option value="pending" {% if status == "pending" %}selected{% endif %}>Pending</option>
+        </select>
+      </div>
+      <div>
+        <label>Page size</label>
+        <input type="number" name="page_size" value="{{ page_size }}" min="1">
+      </div>
+      <div>
+        <label>Page</label>
+        <input type="number" name="page" value="{{ page }}" min="1">
+      </div>
+      <div>
+        <button type="submit">Apply</button>
+      </div>
+      <div class="muted">Total: {{ total }} — Page {{ page }} / {{ pages }}</div>
+    </form>
+  </div>
+
   <div class="card">
     <ul>
       {% for job in jobs %}
@@ -37,6 +69,21 @@
         </li>
       {% endfor %}
     </ul>
+    <nav>
+      {% if page > 1 %}
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
+      {% endif %}
+      {% for p in range(1, pages + 1) %}
+        {% if p == page %}
+          <strong>{{ p }}</strong>
+        {% else %}
+          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
+        {% endif %}
+      {% endfor %}
+      {% if page < pages %}
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </nav>
   </div>
 
   <script>
