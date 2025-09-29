@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AI Crawler Assistant</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .muted { color: #666; }
+    form { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+    label { display: block; margin: 8px 0 4px; }
+    input[type="text"], input[type="number"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #0b5ed7; color: #fff; cursor: pointer; }
+    button:hover { background: #0949a6; }
+    pre { white-space: pre-wrap; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  </style>
+</head>
+<body>
+  <h1>AI Crawler Assistant</h1>
+  <p class="muted">Simple frontend to trigger crawls, build index, ask questions, and generate reports.</p>
+
+  <div class="grid">
+    <div>
+      <h2>Crawl</h2>
+      <form id="crawlForm">
+        <label>Query</label>
+        <input type="text" name="query" placeholder="e.g. retrieval augmented generation">
+        <label>URLs (space-separated)</label>
+        <input type="text" name="urls" placeholder="e.g. https://arxiv.org/ https://pytorch.org/">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Crawl depth</label>
+        <input type="number" name="crawl_depth" value="1">
+        <label>Max pages total</label>
+        <input type="number" name="max_pages_total" value="50">
+        <label>Allow external links</label>
+        <input type="checkbox" name="allow_external" checked>
+        <label>Concurrency</label>
+        <input type="number" name="concurrency" value="4">
+        <label>Per-domain concurrency</label>
+        <input type="number" name="per_domain_concurrency" value="2">
+        <label>Per-domain delay (s)</label>
+        <input type="number" name="per_domain_delay" value="0.5" step="0.1">
+        <label>Retries</label>
+        <input type="number" name="max_retries" value="2">
+        <label>Backoff base</label>
+        <input type="number" name="backoff_base" value="0.5" step="0.1">
+        <label>Save state</label>
+        <input type="checkbox" name="save_state">
+        <label>Resume</label>
+        <input type="checkbox" name="resume">
+        <button type="submit">Start Crawl</button>
+      </form>
+    </div>
+
+    <div>
+      <h2>Index & Ask</h2>
+      <form id="indexForm">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Model name</label>
+        <input type="text" name="model_name" value="sentence-transformers/all-MiniLM-L6-v2">
+        <button type="submit">Build Index</button>
+      </form>
+
+      <form id="askForm">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Question</label>
+        <input type="text" name="question" placeholder="e.g. What are key benefits of RAG?">
+        <label>Top K</label>
+        <input type="number" name="top_k" value="5">
+        <label>Synthesize answer</label>
+        <input type="checkbox" name="synthesize" checked>
+        <button type="submit">Ask</button>
+      </form>
+    </div>
+  </div>
+
+  <h2>Report</h2>
+  <form id="reportForm">
+    <label>Output dir</label>
+    <input type="text" name="output_dir" value="data">
+    <label>Question (optional)</label>
+    <input type="text" name="question" placeholder="Optional question for Q&A in report">
+    <label>Top K</label>
+    <input type="number" name="top_k" value="5">
+    <label>Synthesize</label>
+    <input type="checkbox" name="synthesize" checked>
+    <label>Page size</label>
+    <input type="number" name="page_size" value="50">
+    <label>Theme</label>
+    <input type="text" name="theme" value="light">
+    <button type="submit">Generate Report</button>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="resp"></pre>
+
+  <script>
+    function getFormData(form) {
+      const data = {};
+      new FormData(form).forEach((value, key) => {
+        if (value === "on") {
+          data[key] = true;
+        } else if (!isNaN(value) && value !== "") {
+          data[key] = Number(value);
+        } else if (key === "urls" && value.trim() !== "") {
+          data[key] = value.trim().split(/\s+/);
+        } else {
+          data[key] = value;
+        }
+      });
+      return data;
+    }
+
+    async function postJSON(url, payload) {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      try {
+        const json = await res.json();
+        return json;
+      } catch (e) {
+        return { status: res.status, text: await res.text() };
+      }
+    }
+
+    const resp = document.getElementById("resp");
+
+    document.getElementById("crawlForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/crawl", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("indexForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/build-index", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("askForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/ask", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("reportForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/report", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+  </script>
+</body>
+</html>

@@ -1,11 +1,22 @@
 from fastapi import FastAPI, Body
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import os
 import json
 from typing import Optional, List, Dict
 
-from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult
+from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
+
+# Jinja2 environment for minimal frontend
+try:
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+    env = Environment(
+        loader=FileSystemLoader(searchpath=os.path.join(os.getcwd(), "templates")),
+        autoescape=select_autoescape(["html"])
+    )
+except Exception:
+    env = None
 
 app = FastAPI(title="AI Crawler Assistant API")
 
@@ -86,22 +97,44 @@ def api_ask(req: AskRequest):
 
 @app.post("/report")
 def api_report(req: ReportRequest):
-    # Load existing index.json to get results list
+    # Load existing index.json to get results list and stats
     index_path = os.path.join(req.output_dir, "index.json")
     results: List[CrawlResult] = []
+    stats: Dict[str, Dict] = {}
     if os.path.exists(index_path):
         try:
             with open(index_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            for r in data:
-                results.append(CrawlResult(**r))
+            if isinstance(data, list):
+                # legacy format
+                for r in data:
+                    results.append(CrawlResult(**r))
+                stats = compute_domain_stats(results)
+            else:
+                for r in data.get("results", []):
+                    results.append(CrawlResult(**r))
+                stats = data.get("stats", compute_domain_stats(results))
         except Exception:
             pass
     qa_obj = None
     if req.question:
         qa_obj = ask_question(output_dir=req.output_dir, question=req.question, top_k=req.top_k, synthesize=req.synthesize)
     pages = generate_html_report_jinja(req.output_dir, results, qa=qa_obj, page_size=req.page_size, theme=req.theme)
-    return {"pages": pages, "qa": qa_obj}
+    return {"pages": pages, "qa": qa_obj, "stats": stats}
+
+@app.get("/ui", response_class=HTMLResponse)
+def ui():
+    if env:
+        try:
+            tmpl = env.get_template("ui.html")
+            return tmpl.render()
+        except Exception:
+            pass
+    # Fallback HTML
+    return """<!doctype html><html><head><meta charset='utf-8'><title>AI Crawler Assistant</title></head>
+    <body><h1>AI Crawler Assistant</h1>
+    <p>Frontend template not found. Use API endpoints: /crawl, /build-index, /ask, /report</p>
+    </body></html>"""
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

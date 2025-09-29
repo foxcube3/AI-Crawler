@@ -635,18 +635,22 @@ def crawl(
     if save_state:
         save_crawl_state(output_dir, frontier, results, inflight_by_domain, state_path)
 
-    # Save index.json
+    # Save index.json (include per-domain stats)
     index_path = os.path.join(output_dir, "index.json")
     index_data = [asdict(r) for r in results]
+    stats = compute_domain_stats(results)
+    index_obj = {"results": index_data, "stats": stats}
     with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_data, f, ensure_ascii=False, indent=2)
+        json.dump(index_obj, f, ensure_ascii=False, indent=2)
 
     report_path = None
     qa_obj = None
     if synthesize_question:
         qa_obj = ask_question(output_dir, synthesize_question, top_k=top_k_for_summary, model_name="sentence-transformers/all-MiniLM-L6-v2", synthesize=True)
-        report_path = generate_html_report(output_dir, results, qa=qa_obj)
-    return {"results": index_data, "index_path": index_path, "report_path": report_path, "qa": qa_obj}
+        # Prefer Jinja2 templated report with pagination when available
+        pages = generate_html_report_jinja(output_dir, results, qa=qa_obj, page_size=50, theme="light")
+        report_path = pages[0] if pages else None
+    return {"results": index_data, "stats": stats, "index_path": index_path, "report_path": report_path, "qa": qa_obj}
 
 
 def discover_urls_by_query(query: str, max_results: int = 10) -> List[str]:
@@ -843,19 +847,29 @@ def main():
         # Generate report from existing index and optional question
         index_path = os.path.join(args.output_dir, "index.json")
         results: List[CrawlResult] = []
+        stats: Dict[str, Dict[str, float]] = {}
         if os.path.exists(index_path):
             try:
                 with open(index_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                for r in data:
-                    results.append(CrawlResult(**r))
+                # Support legacy list-only format or new object format
+                if isinstance(data, list):
+                    for r in data:
+                        results.append(CrawlResult(**r))
+                    stats = compute_domain_stats(results)
+                elif isinstance(data, dict):
+                    for r in data.get("results", []):
+                        results.append(CrawlResult(**r))
+                    stats = data.get("stats", compute_domain_stats(results))
             except Exception:
                 pass
         qa_obj = None
         if args.ask:
             qa_obj = ask_question(output_dir=args.output_dir, question=args.ask, top_k=args.top_k, synthesize=args.synthesize)
-        report_path = generate_html_report(args.output_dir, results, qa=qa_obj)
-        print(json.dumps({"report_path": report_path, "qa": qa_obj}, ensure_ascii=False, indent=2))
+        # Prefer Jinja2 templated report (pagination/themes) if templates are present
+        pages = generate_html_report_jinja(args.output_dir, results, qa=qa_obj, page_size=50, theme="light")
+        report_path = pages[0] if pages else generate_html_report(args.output_dir, results, qa=qa_obj)
+        print(json.dumps({"report_path": report_path, "pages": pages, "qa": qa_obj, "stats": stats}, ensure_ascii=False, indent=2))
         return
 
     if args.ask:
