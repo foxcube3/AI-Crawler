@@ -12,6 +12,10 @@ from datetime import datetime
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
 
+# Simple in-memory cache for job summaries
+SUMMARY_CACHE: Dict[str, Dict] = {}  # job_id -> {"summary": dict, "ts": float}
+SUMMARY_TTL_SECONDS = 60.0
+
 # Optional cron scheduling
 try:
     from croniter import croniter
@@ -709,6 +713,11 @@ def list_jobs(output_dir: str = "data"):
     return {"jobs": jobs}
 
 def _compute_job_summary(job_id: str) -> Dict[str, float]:
+    # Use cache if fresh
+    now = time.time()
+    cached = SUMMARY_CACHE.get(job_id)
+    if cached and (now - cached.get("ts", 0.0) < SUMMARY_TTL_SECONDS):
+        return cached.get("summary", {"total": 0, "ok": 0, "errors": 0, "avg_ms": 0.0})
     # Aggregate totals, ok, errors, avg_ms across events for a job
     rows = _db_query("SELECT data_json FROM events WHERE job_id=?", (job_id,))
     total = 0
@@ -732,7 +741,9 @@ def _compute_job_summary(job_id: str) -> Dict[str, float]:
         except Exception:
             continue
     avg_ms = sum(durations) / len(durations) if durations else 0.0
-    return {"total": total, "ok": ok, "errors": errors, "avg_ms": avg_ms}
+    summary = {"total": total, "ok": ok, "errors": errors, "avg_ms": avg_ms}
+    SUMMARY_CACHE[job_id] = {"summary": summary, "ts": now}
+    return summary
 
 @app.get("/jobs-ui", response_class=HTMLResponse)
 def jobs_ui(
@@ -744,6 +755,7 @@ def jobs_ui(
     start: Optional[str] = None,
     end: Optional[str] = None,
     domain: Optional[str] = None,
+    include_cancelled: bool = True,
 ):
     # Retrieve and filter jobs
     data = list_jobs(output_dir=output_dir)
@@ -785,6 +797,10 @@ def jobs_ui(
         except Exception:
             jobs = [j for j in jobs if False]  # no match if error
 
+    # Cancelled filter
+    if not include_cancelled:
+        jobs = [j for j in jobs if j.get("meta", {}).get("status") != "cancelled"]
+
     # Status filter
     if status in {"active", "running"}:
         jobs = [j for j in jobs if j.get("active")]
@@ -806,12 +822,32 @@ def jobs_ui(
     end_idx = min(total, start_idx + page_size)
     jobs_page = jobs[start_idx:end_idx]
 
-    # Compute summaries for displayed jobs only
+    # Compute summaries for displayed jobs only (cached)
     summaries: Dict[str, Dict[str, float]] = {}
     for j in jobs_page:
         jid = j.get("job_id")
         if jid:
             summaries[jid] = _compute_job_summary(jid)
+
+    # Build domain dropdown options from recent events
+    domain_options: List[str] = []
+    try:
+        evs = _db_query("SELECT data_json FROM events ORDER BY ts DESC LIMIT 5000")
+        seen = set()
+        for (dj,) in evs:
+            try:
+                ev = json.loads(dj)
+                res = ev.get("result")
+                if isinstance(res, dict):
+                    d = (res.get("domain") or "").lower().strip()
+                    if d and d not in seen:
+                        seen.add(d)
+                        domain_options.append(d)
+            except Exception:
+                continue
+        domain_options.sort()
+    except Exception:
+        domain_options = []
 
     if env:
         try:
@@ -828,7 +864,9 @@ def jobs_ui(
                 start=start or "",
                 end=end or "",
                 domain=dom,
+                include_cancelled=include_cancelled,
                 summaries=summaries,
+                domain_options=domain_options,
             )
         except Exception:
             pass

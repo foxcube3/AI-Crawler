@@ -41,7 +41,12 @@
       </div>
       <div>
         <label>Domain</label>
-        <input type="text" name="domain" value="{{ domain or '' }}" placeholder="e.g. arxiv.org">
+        <select name="domain">
+          <option value="" {% if not domain %}selected{% endif %}>(any)</option>
+          {% for d in domain_options %}
+            <option value="{{ d }}" {% if domain == d %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
         <label>Start</label>
@@ -60,11 +65,14 @@
         <input type="number" name="page" value="{{ page }}" min="1">
       </div>
       <div>
+        <label><input type="checkbox" name="include_cancelled" {% if include_cancelled %}checked{% endif %}> Include cancelled</label>
+      </div>
+      <div>
         <button type="submit">Apply</button>
       </div>
       <div>
         <a class="btn" href="/jobs-ui?output_dir={{ output_dir or 'data' }}">Reset</a>
-        <a class="btn" href="/jobs-csv?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}">Export CSV</a>
+        <a class="btn" href="/jobs-csv?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&include_cancelled={{ 1 if include_cancelled else 0 }}">Export CSV</a>
       </div>
       <div class="muted">Total: {{ total }} — Page {{ page }} / {{ pages }}</div>
     </form>
@@ -93,17 +101,17 @@
     </ul>
     <nav>
       {% if page > 1 %}
-        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&include_cancelled={{ 1 if include_cancelled else 0 }}&page_size={{ page_size }}&page={{ page - 1 }}">Prev</a>
       {% endif %}
       {% for p in range(1, pages + 1) %}
         {% if p == page %}
           <strong>{{ p }}</strong>
         {% else %}
-          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
+          <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&include_cancelled={{ 1 if include_cancelled else 0 }}&page_size={{ page_size }}&page={{ p }}">{{ p }}</a>
         {% endif %}
       {% endfor %}
       {% if page < pages %}
-        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
+        <a href="/jobs-ui?output_dir={{ output_dir or 'data' }}&status={{ status }}&q={{ q or '' }}&domain={{ domain or '' }}&start={{ start or '' }}&end={{ end or '' }}&include_cancelled={{ 1 if include_cancelled else 0 }}&page_size={{ page_size }}&page={{ page + 1 }}">Next</a>
       {% endif %}
     </nav>
   </div>
