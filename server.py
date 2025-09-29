@@ -6,9 +6,50 @@ import os
 import json
 import time
 import threading
+import sqlite3
 from typing import Optional, List, Dict
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
+
+# Optional cron scheduling
+try:
+    from croniter import croniter
+except Exception:
+    croniter = None
+
+DB_PATH = os.path.join("data", "app.db")
+
+def _init_db():
+    try:
+        os.makedirs("data", exist_ok=True)
+    except Exception:
+        pass
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS schedules (schedule_id TEXT PRIMARY KEY, interval_seconds INTEGER, cron_expr TEXT, params_json TEXT, created_at REAL, active INTEGER)")
+        cur.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, output_dir TEXT, created_at REAL, completed_at REAL, status TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+
+def _db_execute(query: str, args: tuple = ()):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(query, args)
+        conn.commit()
+    finally:
+        conn.close()
+
+def _db_query(query: str, args: tuple = ()) -> List[tuple]:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(query, args)
+        return cur.fetchall()
+    finally:
+        conn.close()
 
 # Schedules persistence helpers
 def _schedules_file(output_dir: Optional[str] = None) -> str:
@@ -604,33 +645,62 @@ def job_detail(job_id: str, output_dir: str = "data"):
 SCHEDULES: Dict[str, Dict] = {}  # schedule_id -> {"interval": int, "params": dict, "cancel": dict, "thread": Thread, "output_dir": str}
 
 class ScheduleRequest(BaseModel):
-    interval_seconds: int
+    interval_seconds: Optional[int] = None
+    cron_expr: Optional[str] = None
     params: CrawlRequest
 
 def _schedule_loop(schedule_id: str):
     sched = SCHEDULES.get(schedule_id)
     if not sched:
         return
-    interval = max(1, int(sched["interval"]))
     cancel = sched["cancel"]
     params: CrawlRequest = sched["params"]
-    while not cancel["value"]:
-        # Launch a job using the same params
-        try:
-            create_job(params)
-        except Exception:
-            pass
-        # Sleep until next run or until cancelled
-        for _ in range(interval):
-            if cancel["value"]:
-                break
-            time.sleep(1)
+    interval = sched.get("interval")
+    cron = sched.get("cron_expr")
+    if cron and croniter:
+        base = time.time()
+        it = croniter(cron, base)
+        next_run = it.get_next(float)
+        while not cancel["value"]:
+            now = time.time()
+            if now >= next_run:
+                try:
+                    create_job(params)
+                except Exception:
+                    pass
+                next_run = it.get_next(float)
+            time.sleep(0.5)
+    else:
+        interval = max(1, int(interval or 60))
+        while not cancel["value"]:
+            try:
+                create_job(params)
+            except Exception:
+                pass
+            for _ in range(interval):
+                if cancel["value"]:
+                    break
+                time.sleep(1)
 
 @app.post("/schedules")
 def create_schedule(req: ScheduleRequest):
     schedule_id = str(uuid4())
     cancel = {"value": False}
-    SCHEDULES[schedule_id] = {"interval": req.interval_seconds, "params": req.params, "cancel": cancel, "created_at": time.time()}
+    SCHEDULES[schedule_id] = {
+        "interval": req.interval_seconds,
+        "cron_expr": req.cron_expr,
+        "params": req.params,
+        "cancel": cancel,
+        "created_at": time.time(),
+    }
+    # Persist to DB
+    try:
+        _db_execute(
+            "INSERT OR REPLACE INTO schedules(schedule_id, interval_seconds, cron_expr, params_json, created_at, active) VALUES(?,?,?,?,?,1)",
+            (schedule_id, req.interval_seconds or 0, req.cron_expr or "", json.dumps(req.params.dict()), time.time()),
+        )
+    except Exception:
+        pass
     t = threading.Thread(target=_schedule_loop, args=(schedule_id,), daemon=True)
     SCHEDULES[schedule_id]["thread"] = t
     t.start()
@@ -639,10 +709,10 @@ def create_schedule(req: ScheduleRequest):
 
 @app.get("/schedules")
 def list_schedules(output_dir: str = "data"):
-    # Combine in-memory schedules with persisted ones if any
+    # Combine in-memory schedules with persisted JSON and DB
     items = []
     for sid, s in SCHEDULES.items():
-        items.append({"schedule_id": sid, "interval_seconds": s["interval"], "params": s["params"].dict(), "created_at": s.get("created_at", time.time())})
+        items.append({"schedule_id": sid, "interval_seconds": s.get("interval"), "cron_expr": s.get("cron_expr"), "params": s["params"].dict(), "created_at": s.get("created_at", time.time())})
     # Read persisted file (optional)
     try:
         with open(_schedules_file(output_dir), "r", encoding="utf-8") as f:
@@ -650,6 +720,19 @@ def list_schedules(output_dir: str = "data"):
         for it in (data.get("schedules") or []):
             if not any(x["schedule_id"] == it.get("schedule_id") for x in items):
                 items.append(it)
+    except Exception:
+        pass
+    # Read from DB
+    try:
+        rows = _db_query("SELECT schedule_id, interval_seconds, cron_expr, params_json, created_at FROM schedules WHERE active=1")
+        for sid, interval, cron, params_json, created_at in rows:
+            if not any(x["schedule_id"] == sid for x in items):
+                try:
+                    params = json.loads(params_json)
+                except Exception:
+                    params = {}
+                items.append({"schedule_id": sid, "interval_seconds": interval, "cron_expr": cron, "params": params, "created_at": created_at})
+        # Optionally, update in-memory from DB
     except Exception:
         pass
     return {"schedules": items}
@@ -670,6 +753,22 @@ def delete_schedule(schedule_id: str):
 
 # Load schedules on startup (best-effort)
 try:
+    _init_db()
+    # Load from DB first
+    rows = _db_query("SELECT schedule_id, interval_seconds, cron_expr, params_json, created_at FROM schedules WHERE active=1")
+    for sid, interval, cron, params_json, created_at in rows:
+        if sid in SCHEDULES:
+            continue
+        try:
+            params = CrawlRequest(**json.loads(params_json))
+            cancel = {"value": False}
+            SCHEDULES[sid] = {"interval": interval, "cron_expr": cron, "params": params, "cancel": cancel, "created_at": created_at}
+            t = threading.Thread(target=_schedule_loop, args=(sid,), daemon=True)
+            SCHEDULES[sid]["thread"] = t
+            t.start()
+        except Exception:
+            continue
+    # Then JSON fallback
     _load_schedules_from_disk()
 except Exception:
     pass

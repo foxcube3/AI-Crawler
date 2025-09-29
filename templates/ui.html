@@ -154,6 +154,8 @@ logout
     <form id="scheduleForm">
       <label>Interval (seconds)</label>
       <input type="number" name="interval_seconds" value="3600">
+      <label>or Cron expression (e.g. */30 * * * *)</label>
+      <input type="text" name="cron_expr" placeholder="*/30 * * * *">
       <button type="submit">Create Schedule (uses current Crawl form params)</button>
     </form>
     <button id="refreshSchedules">Refresh Schedules</button>
