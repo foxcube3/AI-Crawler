@@ -210,8 +210,6 @@ def save_text(text: str, url: str, output_dir: str, title: Optional[str]) -> str
 def crawl_url(url: str, output_dir: str, timeout: int = 20) -> CrawlResult:
     parsed = urlparse(url)
     domain = parsed.netloc
-    if not is_allowed_by_robots(url):
-        return CrawlResult(url=url, title=None, text_path=None, status="blocked_by_robots", domain=domain)
 
     resp, err = fetch(url, timeout=timeout)
     if resp is None:
