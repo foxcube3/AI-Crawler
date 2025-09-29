@@ -7,6 +7,8 @@ from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Tuple
 from urllib.parse import urlparse, urljoin
 import urllib.robotparser as robotparser
+from io import BytesIO
+import tempfile
 
 import requests
 from bs4 import BeautifulSoup
@@ -17,6 +19,32 @@ try:
     from duckduckgo_search import DDGS
 except Exception:
     DDGS = None  # fallback if not available
+
+# Document extraction deps
+try:
+    from pdfminer.high_level import extract_text as pdf_extract_text
+except Exception:
+    pdf_extract_text = None
+
+try:
+    import docx  # python-docx
+except Exception:
+    docx = None
+
+try:
+    from ebooklib import epub
+except Exception:
+    epub = None
+
+# Embeddings / vector store
+try:
+    import numpy as np
+    import faiss
+    from sentence_transformers import SentenceTransformer
+except Exception:
+    np = None
+    faiss = None
+    SentenceTransformer = None
 
 
 USER_AGENT = (
@@ -55,45 +83,235 @@ def is_allowed_by_robots(url: str, user_agent: str = USER_AGENT) -> bool:
         rp.read()
         return rp.can_fetch(user_agent, url)
     except Exception:
-        # If robots.txt cannot be fetched, be conservative but allow
         return True
 
 
-def fetch_html(url: str, timeout: int = 20) -> Tuple[Optional[str], Optional[str]]:
+def fetch(url: str, timeout: int = 20) -> Tuple[Optional[requests.Response], Optional[str]]:
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"}
     try:
         resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
-        # Try to guess title
-        soup = BeautifulSoup(resp.text, "html.parser")
-        title_tag = soup.find("title")
-        title = title_tag.get_text(strip=True) if title_tag else None
-        return resp.text, title
+        return resp, None
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
 
 
-def extract_text(html: str, url: str) -> Optional[str]:
-    # Prefer trafilatura extraction
+def guess_title_from_html(html: str) -> Optional[str]:
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        title_tag = soup.find("title")
+        return title_tag.get_text(strip=True) if title_tag else None
+    except Exception:
+        return None
+
+
+def extract_text_from_html(html: str, url: str) -> Optional[str]:
     try:
         downloaded = trafilatura.extract(html, url=url, include_comments=False)
         if downloaded and downloaded.strip():
             return downloaded.strip()
     except Exception:
         pass
-    # Fallback: simple text extraction with BeautifulSoup
     try:
         soup = BeautifulSoup(html, "html.parser")
         for script in soup(["script", "style", "noscript"]):
             script.extract()
         text = soup.get_text(separator="\n")
-        # Collapse excessive blank lines
         text = re.sub(r"\n{3,}", "\n\n", text)
         if text and text.strip():
             return text.strip()
     except Exception:
         pass
     return None
+
+
+def extract_text_from_pdf(data: bytes) -> Optional[str]:
+    if pdf_extract_text is None:
+        return None
+    try:
+        return pdf_extract_text(BytesIO(data)) or None
+    except Exception:
+        return None
+
+
+def extract_text_from_docx(data: bytes) -> Optional[str]:
+    if docx is None:
+        return None
+    try:
+        document = docx.Document(BytesIO(data))
+        paragraphs = [p.text for p in document.paragraphs if p.text and p.text.strip()]
+        return "\n\n".join(paragraphs) or None
+    except Exception:
+        return None
+
+
+def extract_text_from_epub(data: bytes) -> Optional[str]:
+    if epub is None:
+        return None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".epub", delete=True) as tf:
+            tf.write(data)
+            tf.flush()
+            book = epub.read_epub(tf.name)
+        texts: List[str] = []
+        for item in book.get_items():
+            if item.get_type() == epub.ITEM_DOCUMENT:
+                try:
+                    soup = BeautifulSoup(item.get_content(), "html.parser")
+                    t = soup.get_text(separator="\n")
+                    if t and t.strip():
+                        texts.append(t.strip())
+                except Exception:
+                    continue
+        return "\n\n".join(texts) if texts else None
+    except Exception:
+        return None
+
+
+def detect_and_extract(resp: requests.Response, url: str) -> Tuple[Optional[str], Optional[str]]:
+    content_type = resp.headers.get("Content-Type", "").lower()
+    if "text/html" in content_type or (not content_type and "<html" in resp.text[:1000].lower()):
+        html = resp.text
+        text = extract_text_from_html(html, url)
+        title = guess_title_from_html(html)
+        return text, title
+    if "application/pdf" in content_type or url.lower().endswith(".pdf"):
+        text = extract_text_from_pdf(resp.content)
+        return text, None
+    if "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in content_type or url.lower().endswith(".docx"):
+        text = extract_text_from_docx(resp.content)
+        return text, None
+    if "application/epub+zip" in content_type or url.lower().endswith(".epub"):
+        text = extract_text_from_epub(resp.content)
+        return text, None
+    # Fallback treat as HTML if looks like it
+    try:
+        html = resp.text
+        text = extract_text_from_html(html, url)
+        title = guess_title_from_html(html)
+        return text, title
+    except Exception:
+        return None, None
+
+
+def save_text(text: str, url: str, output_dir: str, title: Optional[str]) -> str:
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    slug_source = title or parsed.path or "page"
+    slug = sanitize_filename(slug_source)
+    dir_path = os.path.join(output_dir, domain)
+    ensure_dir(dir_path)
+    file_path = os.path.join(dir_path, f"{slug}.txt")
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return file_path
+
+
+def crawl_url(url: str, output_dir: str, timeout: int = 20) -> CrawlResult:
+    parsed = urlparse(url)
+    domain = parsed.netloc
+    if not is_allowed_by_robots(url):
+        return CrawlResult(url=url, title=None, text_path=None, status="blocked_by_robots", domain=domain)
+
+    resp, err = fetch(url, timeout=timeout)
+    if resp is None:
+        return CrawlResult(url=url, title=None, text_path=None, status="fetch_error", domain=domain, error=err)
+
+    text, title = detect_and_extract(resp, url)
+    if not text:
+        return CrawlResult(url=url, title=None, text_path=None, status="extraction_failed", domain=domain)
+
+    text_path = save_text(text, url, output_dir, title)
+    return CrawlResult(url=url, title=title, text_path=text_path, status="ok", domain=domain)
+
+
+def extract_links(html: str, base_url: str) -> List[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    links: List[str] = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        abs_url = urljoin(base_url, href)
+        parsed = urlparse(abs_url)
+        if parsed.scheme.startswith("http"):
+            links.append(abs_url)
+    seen = set()
+    unique = []
+    for u in links:
+        if u not in seen:
+            unique.append(u)
+            seen.add(u)
+    return unique
+
+
+def crawl(
+    query: Optional[str],
+    urls: Optional[List[str]],
+    output_dir: str = "data",
+    max_results: int = 10,
+    crawl_depth: int = 1,
+    max_pages_total: int = 50,
+    timeout: int = 20,
+    allow_external: bool = True,
+) -> Dict[str, List[Dict]]:
+    ensure_dir(output_dir)
+    discovered: List[str] = []
+    if query:
+        discovered = discover_urls_by_query(query, max_results=max_results)
+    if urls:
+        discovered.extend(urls)
+
+    # Deduplicate seeds
+    seen = set()
+    seeds: List[str] = []
+    for u in discovered:
+        if u not in seen:
+            seeds.append(u)
+            seen.add(u)
+
+    results: List[CrawlResult] = []
+    visited: set = set()
+    queue: List[Tuple[str, int]] = [(u, 0) for u in seeds]
+
+    while queue and len(results) < max_pages_total:
+        current_url, depth = queue.pop(0)
+        if current_url in visited:
+            continue
+        visited.add(current_url)
+
+        resp, err = fetch(current_url, timeout=timeout)
+        if resp is None:
+            results.append(CrawlResult(url=current_url, title=None, text_path=None, status="fetch_error", domain=urlparse(current_url).netloc, error=err))
+            continue
+
+        # Extract text (HTML/PDF/DOCX/EPUB)
+        text, title = detect_and_extract(resp, current_url)
+        if not text:
+            results.append(CrawlResult(url=current_url, title=None, text_path=None, status="extraction_failed", domain=urlparse(current_url).netloc))
+        else:
+            # Save
+            text_path = save_text(text, current_url, output_dir, title)
+            results.append(CrawlResult(url=current_url, title=title, text_path=text_path, status="ok", domain=urlparse(current_url).netloc))
+
+        # Expand links if HTML and depth allows
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if depth < crawl_depth and ("text/html" in content_type or "<html" in resp.text[:1000].lower()):
+            next_links = extract_links(resp.text, current_url)
+            for nl in next_links:
+                if not allow_external:
+                    if urlparse(nl).netloc != urlparse(current_url).netloc:
+                        continue
+                if nl not in visited:
+                    queue.append((nl, depth + 1))
+
+        time.sleep(0.3)
+
+    # Save index.json
+    index_path = os.path.join(output_dir, "index.json")
+    index_data = [asdict(r) for r in results]
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index_data, f, ensure_ascii=False, indent=2)
+
+    return {"results": index_data, "index_path": index_path}
 
 
 def discover_urls_by_query(query: str, max_results: int = 10) -> List[str]:
@@ -111,143 +329,146 @@ def discover_urls_by_query(query: str, max_results: int = 10) -> List[str]:
     return urls
 
 
-def save_text(text: str, url: str, output_dir: str, title: Optional[str]) -> str:
-    parsed = urlparse(url)
-    domain = parsed.netloc
-    # Create a slug from title or URL path
-    slug_source = title or parsed.path or "page"
-    slug = sanitize_filename(slug_source)
-    dir_path = os.path.join(output_dir, domain)
-    ensure_dir(dir_path)
-    file_path = os.path.join(dir_path, f"{slug}.txt")
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return file_path
+# ---------- Vector store and Q&A ----------
+
+def load_text_files(output_dir: str) -> List[Tuple[str, str]]:
+    data: List[Tuple[str, str]] = []
+    for root, _, files in os.walk(output_dir):
+        for fn in files:
+            if fn.endswith(".txt"):
+                path = os.path.join(root, fn)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        txt = f.read()
+                        if txt and txt.strip():
+                            data.append((path, txt))
+                except Exception:
+                    continue
+    return data
 
 
-def crawl_url(url: str, output_dir: str, timeout: int = 20) -> CrawlResult:
-    parsed = urlparse(url)
-    domain = parsed.netloc
-    if not is_allowed_by_robots(url):
-        return CrawlResult(url=url, title=None, text_path=None, status="blocked_by_robots", domain=domain)
-
-    html, err = fetch_html(url, timeout=timeout)
-    if html is None:
-        return CrawlResult(url=url, title=None, text_path=None, status="fetch_error", domain=domain, error=err)
-
-    text = extract_text(html, url)
-    if not text:
-        return CrawlResult(url=url, title=None, text_path=None, status="extraction_failed", domain=domain)
-
-    # Get title again for filename; fetch_html gave either title or error string
-    _, title = fetch_html(url, timeout=timeout)
-    title = None if title and "Error" in title else title
-    text_path = save_text(text, url, output_dir, title)
-    return CrawlResult(url=url, title=title, text_path=text_path, status="ok", domain=domain)
+def chunk_text(text: str, max_chars: int = 1200) -> List[str]:
+    parts: List[str] = []
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text) if p.strip()]
+    current = []
+    length = 0
+    for p in paragraphs:
+        if length + len(p) + 2 <= max_chars:
+            current.append(p)
+            length += len(p) + 2
+        else:
+            if current:
+                parts.append("\n\n".join(current))
+            current = [p]
+            length = len(p)
+    if current:
+        parts.append("\n\n".join(current))
+    return parts
 
 
-def expand_links(html: str, base_url: str, limit: int) -> List[str]:
-    if limit <= 0:
-        return []
-    soup = BeautifulSoup(html, "html.parser")
-    links: List[str] = []
-    base_domain = urlparse(base_url).netloc
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        abs_url = urljoin(base_url, href)
-        parsed = urlparse(abs_url)
-        if parsed.scheme.startswith("http") and parsed.netloc == base_domain:
-            links.append(abs_url)
-        if len(links) >= limit:
-            break
-    # Deduplicate while preserving order
-    seen = set()
-    unique = []
-    for u in links:
-        if u not in seen:
-            unique.append(u)
-            seen.add(u)
-    return unique
+def build_vector_index(output_dir: str, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> Dict[str, str]:
+    if np is None or faiss is None or SentenceTransformer is None:
+        raise RuntimeError("Vector store dependencies not available. Please install requirements.")
+    docs = load_text_files(output_dir)
+    if not docs:
+        raise RuntimeError("No text files found to index.")
+
+    model = SentenceTransformer(model_name)
+    passages: List[str] = []
+    meta: List[Dict] = []
+    for path, text in docs:
+        chunks = chunk_text(text)
+        for i, ch in enumerate(chunks):
+            passages.append(ch)
+            meta.append({"path": path, "chunk": i})
+
+    embeddings = model.encode(passages, normalize_embeddings=True, convert_to_numpy=True)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dim)
+    index.add(embeddings.astype("float32"))
+
+    # Save index and passages/meta
+    idx_path = os.path.join(output_dir, "index.faiss")
+    faiss.write_index(index, idx_path)
+    with open(os.path.join(output_dir, "passages.json"), "w", encoding="utf-8") as f:
+        json.dump({"passages": passages, "meta": meta}, f, ensure_ascii=False)
+
+    return {"index_path": idx_path, "passages_path": os.path.join(output_dir, "passages.json")}
 
 
-def crawl(
-    query: Optional[str],
-    urls: Optional[List[str]],
-    output_dir: str = "data",
-    max_results: int = 10,
-    max_pages_per_site: int = 1,
-    timeout: int = 20,
-) -> Dict[str, List[Dict]]:
-    ensure_dir(output_dir)
-    discovered: List[str] = []
-    if query:
-        discovered = discover_urls_by_query(query, max_results=max_results)
-    if urls:
-        discovered.extend(urls)
+def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> Dict:
+    if np is None or faiss is None or SentenceTransformer is None:
+        raise RuntimeError("Vector store dependencies not available. Please install requirements.")
+    idx_path = os.path.join(output_dir, "index.faiss")
+    passages_path = os.path.join(output_dir, "passages.json")
+    if not os.path.exists(idx_path) or not os.path.exists(passages_path):
+        build_vector_index(output_dir, model_name=model_name)
 
-    # Deduplicate
-    seen = set()
-    seeds: List[str] = []
-    for u in discovered:
-        if u not in seen:
-            seeds.append(u)
-            seen.add(u)
+    index = faiss.read_index(idx_path)
+    with open(passages_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    passages = data["passages"]
+    meta = data["meta"]
 
-    results: List[CrawlResult] = []
-    for u in seeds:
-        # Fetch first page
-        html, err = fetch_html(u, timeout=timeout)
-        if html is None:
-            r = CrawlResult(url=u, title=None, text_path=None, status="fetch_error", domain=urlparse(u).netloc, error=err)
-            results.append(r)
+    model = SentenceTransformer(model_name)
+    q_emb = model.encode([question], normalize_embeddings=True, convert_to_numpy=True).astype("float32")
+    scores, idxs = index.search(q_emb, top_k)
+    idxs = idxs[0].tolist()
+    scores = scores[0].tolist()
+
+    hits = []
+    for i, s in zip(idxs, scores):
+        if i < 0 or i >= len(passages):
             continue
+        hits.append({
+            "score": float(s),
+            "passage": passages[i],
+            "source": meta[i]["path"],
+            "chunk": meta[i]["chunk"],
+        })
 
-        # Crawl and save first page
-        first_res = crawl_url(u, output_dir=output_dir, timeout=timeout)
-        results.append(first_res)
-
-        # Expand links within the same site (optional)
-        extra_links = expand_links(html, base_url=u, limit=max_pages_per_site)
-        for ex in extra_links:
-            # Avoid recrawling the same URL
-            if any(r.url == ex for r in results):
-                continue
-            ex_res = crawl_url(ex, output_dir=output_dir, timeout=timeout)
-            results.append(ex_res)
-
-        # Be polite between sites
-        time.sleep(0.5)
-
-    # Save index.json
-    index_path = os.path.join(output_dir, "index.json")
-    index_data = [asdict(r) for r in results]
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_data, f, ensure_ascii=False, indent=2)
-
-    return {"results": index_data, "index_path": index_path}
+    # Simple extractive "answer": best passage snippet
+    answer = hits[0]["passage"] if hits else ""
+    return {"question": question, "answer": answer, "hits": hits}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web and extract full text.")
+    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web (HTML/PDF/DOCX/EPUB), build vector index, and Q&A.")
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--query", type=str, help="Search query to discover pages (DuckDuckGo).")
     group.add_argument("--urls", nargs="+", help="Specific URLs to crawl.")
     parser.add_argument("--max-results", type=int, default=10, help="Max search results to crawl.")
-    parser.add_argument("--max-pages-per-site", type=int, default=1, help="Extra pages to follow per site (same domain).")
+    parser.add_argument("--crawl-depth", type=int, default=1, help="Depth for link expansion (can cross domains if allowed).")
+    parser.add_argument("--max-pages-total", type=int, default=50, help="Global page cap for crawling.")
+    parser.add_argument("--allow-external", action="store_true", help="Allow following links across different domains.")
     parser.add_argument("--output-dir", type=str, default="data", help="Output directory for text files and index.json.")
     parser.add_argument("--timeout", type=int, default=20, help="HTTP timeout in seconds.")
+    parser.add_argument("--build-index", action="store_true", help="Build vector index over crawled corpus.")
+    parser.add_argument("--ask", type=str, help="Ask a question over the built corpus.")
+    parser.add_argument("--top-k", type=int, default=5, help="Number of passages to retrieve for Q&A.")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.ask:
+        res = ask_question(output_dir=args.output_dir, question=args.ask, top_k=args.top_k)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+    if args.build_index:
+        res = build_vector_index(output_dir=args.output_dir)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+
     res = crawl(
         query=args.query,
         urls=args.urls,
         output_dir=args.output_dir,
         max_results=args.max_results,
-        max_pages_per_site=args.max_pages_per_site,
+        crawl_depth=args.crawl_depth,
+        max_pages_total=args.max_pages_total,
         timeout=args.timeout,
+        allow_external=args.allow_external,
     )
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
