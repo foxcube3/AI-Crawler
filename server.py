@@ -313,15 +313,23 @@ def create_job(req: CrawlRequest):
     os.makedirs(jobs_dir, exist_ok=True)
     events_path = os.path.join(jobs_dir, f"{job_id}.jsonl")
     meta_path = os.path.join(jobs_dir, f"{job_id}.meta.json")
-    # Persist job metadata
+    now = time.time()
+    # Persist job metadata (file)
     try:
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump({
                 "job_id": job_id,
-                "created_at": time.time(),
+                "created_at": now,
                 "params": req.dict(),
                 "output_dir": outdir,
+                "status": "running",
             }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    # Persist job in DB
+    try:
+        _db_execute("INSERT OR REPLACE INTO jobs(job_id, output_dir, created_at, completed_at, status) VALUES(?,?,?,?,?)",
+                    (job_id, outdir, now, None, "running"))
     except Exception:
         pass
 
@@ -375,6 +383,7 @@ def create_job(req: CrawlRequest):
                 with open(meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                 meta["completed_at"] = time.time()
+                meta["status"] = "done" if not cancel["value"] else "cancelled"
                 # Attempt to load results from index.json and generate report pages
                 index_path = os.path.join(outdir, "index.json")
                 results: List[CrawlResult] = []
@@ -396,6 +405,11 @@ def create_job(req: CrawlRequest):
                         meta["report_pages"] = []
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            # Update DB
+            try:
+                _db_execute("UPDATE jobs SET completed_at=?, status=? WHERE job_id=?", (time.time(), "done" if not cancel["value"] else "cancelled", job_id))
             except Exception:
                 pass
             q.put({"event": "complete"})
