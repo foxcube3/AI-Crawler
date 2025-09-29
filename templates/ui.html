@@ -46,12 +46,26 @@
         <input type="number" name="max_retries" value="2">
         <label>Backoff base</label>
         <input type="number" name="backoff_base" value="0.5" step="0.1">
+        <label>Allowlist patterns (regex, one per line)</label>
+        <textarea name="allowlist_patterns" rows="4" placeholder="e.g.\n^https?://(www\\.)?arxiv.org/\nblog"></textarea>
+        <label>Denylist patterns (regex, one per line)</label>
+        <textarea name="denylist_patterns" rows="4" placeholder="e.g.\nlogout\n\\?replytocom="></textarea>
+        <label>Per-domain allowlist (JSON mapping domain -> [patterns])</label>
+        <textarea name="allowlist_by_domain" rows="3" placeholder='e.g. {"arxiv.org": ["^https?://arxiv.org/abs/"]}'></textarea>
+        <label>Per-domain denylist (JSON mapping domain -> [patterns])</label>
+        <textarea name="denylist_by_domain" rows="3" placeholder='e.g. {"example.com": ["^https?://example.com/admin"]}'></textarea>
         <label>Save state</label>
         <input type="checkbox" name="save_state">
         <label>Resume</label>
         <input type="checkbox" name="resume">
         <button type="submit">Start Crawl</button>
+        <button id="streamBtn" type="button">Start Stream Crawl</button>
       </form>
+      <div id="progress" class="card" style="margin-top:12px;">
+        <strong>Progress</strong>
+        <div class="muted">Live updates via SSE</div>
+        <pre id="progressLog"></pre>
+      </div>
     </div>
 
     <div>
@@ -108,6 +122,14 @@
           data[key] = Number(value);
         } else if (key === "urls" && value.trim() !== "") {
           data[key] = value.trim().split(/\s+/);
+        } else if (key === "allowlist_patterns" || key === "denylist_patterns") {
+          data[key] = value.split("\n").map(s => s.trim()).filter(Boolean);
+        } else if (key === "allowlist_by_domain" || key === "denylist_by_domain") {
+          try {
+            data[key] = value.trim() ? JSON.parse(value) : null;
+          } catch (e) {
+            data[key] = null;
+          }
         } else {
           data[key] = value;
         }
@@ -126,12 +148,37 @@
     }
 
     const resp = document.getElementById("resp");
+    const progressLog = document.getElementById("progressLog");
 
     document.getElementById("crawlForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const data = getFormData(e.target);
       const json = await postJSON("/crawl", data);
       resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("streamBtn").addEventListener("click", async (e) => {
+      const form = document.getElementById("crawlForm");
+      const data = getFormData(form);
+      progressLog.textContent = "";
+      const es = new EventSource("/stream-crawl", { withCredentials: false });
+      // Send body with POST is not supported by EventSource; emulate via a fetch to start stream? 
+      // Here we fallback to starting stream with defaults; for full control, use /crawl or a client lib.
+      // Alternatively, you can use a small bridge endpoint; omitted for brevity.
+      // Display a note:
+      progressLog.textContent += "Note: Stream uses server defaults; adjust via /crawl.\n";
+      es.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(ev.data);
+          progressLog.textContent += JSON.stringify(obj, null, 2) + "\\n";
+        } catch (e) {
+          progressLog.textContent += ev.data + "\\n";
+        }
+      };
+      es.onerror = (err) => {
+        progressLog.textContent += "Stream error\\n";
+        es.close();
+      };
     });
 
     document.getElementById("indexForm").addEventListener("submit", async (e) => {

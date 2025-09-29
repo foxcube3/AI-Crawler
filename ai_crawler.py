@@ -279,6 +279,37 @@ def extract_links(html: str, base_url: str) -> List[str]:
             seen.add(u)
     return unique
 
+def matches_patterns(url: str, patterns: Optional[List[str]]) -> bool:
+    if not patterns:
+        return False
+    for p in patterns:
+        try:
+            if re.search(p, url):
+                return True
+        except Exception:
+            # Treat as simple substring if regex invalid
+            if p in url:
+                return True
+    return False
+
+def should_follow(url: str, current_domain: str, allow_external: bool, allowlist_global: Optional[List[str]], denylist_global: Optional[List[str]], allowlist_by_domain: Optional[Dict[str, List[str]]], denylist_by_domain: Optional[Dict[str, List[str]]]) -> bool:
+    dom = urlparse(url).netloc
+    if not allow_external and dom != current_domain:
+        return False
+    # Deny checks first (global/domain)
+    if matches_patterns(url, denylist_global):
+        return False
+    if denylist_by_domain and matches_patterns(url, denylist_by_domain.get(dom, [])):
+        return False
+    # Allow checks (if any provided). If allowlist present, require a match.
+    allow_any = (allowlist_global and len(allowlist_global) > 0) or (allowlist_by_domain and len(allowlist_by_domain.get(dom, [])) > 0)
+    if allow_any:
+        if matches_patterns(url, allowlist_global) or (allowlist_by_domain and matches_patterns(url, allowlist_by_domain.get(dom, []))):
+            return True
+        else:
+            return False
+    return True
+
 
 def parse_robots_crawl_delay(domain: str) -> Optional[float]:
     # Fetch robots.txt and parse Crawl-delay for any UA; we ignore Disallow.
@@ -360,7 +391,7 @@ class CrawlFrontier:
         return len(self.heap)
 
 
-def process_url(current_url: str, depth: int, output_dir: str, timeout: int, allow_external: bool, crawl_depth: int, ua_rotator: UserAgentRotator, rate_limiter: PerDomainRateLimiter, max_retries: int, backoff_base: float, backoff_jitter: float) -> Tuple[CrawlResult, List[Tuple[str, int]]]:
+def process_url(current_url: str, depth: int, output_dir: str, timeout: int, allow_external: bool, crawl_depth: int, ua_rotator: UserAgentRotator, rate_limiter: PerDomainRateLimiter, max_retries: int, backoff_base: float, backoff_jitter: float, allowlist_global: Optional[List[str]], denylist_global: Optional[List[str]], allowlist_by_domain: Optional[Dict[str, List[str]]], denylist_by_domain: Optional[Dict[str, List[str]]]) -> Tuple[CrawlResult, List[Tuple[str, int]]]:
     domain = urlparse(current_url).netloc
     # Adjust per-domain delay once from robots.txt if available
     if rate_limiter.get_delay(domain) == rate_limiter.default_delay:
@@ -388,7 +419,7 @@ def process_url(current_url: str, depth: int, output_dir: str, timeout: int, all
 
     if html and depth < crawl_depth:
         for nl in extract_links(html, current_url):
-            if not allow_external and urlparse(nl).netloc != domain:
+            if not should_follow(nl, domain, allow_external, allowlist_global, denylist_global, allowlist_by_domain, denylist_by_domain):
                 continue
             nexts.append((nl, depth + 1))
 
@@ -556,6 +587,10 @@ def crawl(
     synthesize_question: Optional[str] = None,
     top_k_for_summary: int = 5,
     progress_callback: Optional[callable] = None,
+    allowlist_patterns: Optional[List[str]] = None,
+    denylist_patterns: Optional[List[str]] = None,
+    allowlist_by_domain: Optional[Dict[str, List[str]]] = None,
+    denylist_by_domain: Optional[Dict[str, List[str]]] = None,
 ) -> Dict[str, List[Dict]]:
     ensure_dir(output_dir)
     discovered: List[str] = []
@@ -624,8 +659,32 @@ def crawl(
                         results.append(result)
                         for nl, nd in nexts:
                             frontier.push(nl, nd)
+                        # Emit progress event if callback provided
+                        if progress_callback:
+                            try:
+                                progress_callback({
+                                    "type": "result",
+                                    "result": asdict(result),
+                                    "stats": compute_domain_stats(results),
+                                    "queue_size": len(frontier),
+                                    "completed": len(results),
+                                })
+                            except Exception:
+                                pass
                     except Exception as e:
-                        results.append(CrawlResult(url=current_url, title=None, text_path=None, status="error", domain=domain, error=f"{type(e).__name__}: {e}"))
+                        err_res = CrawlResult(url=current_url, title=None, text_path=None, status="error", domain=domain, error=f"{type(e).__name__}: {e}")
+                        results.append(err_res)
+                        if progress_callback:
+                            try:
+                                progress_callback({
+                                    "type": "error",
+                                    "result": asdict(err_res),
+                                    "stats": compute_domain_stats(results),
+                                    "queue_size": len(frontier),
+                                    "completed": len(results),
+                                })
+                            except Exception:
+                                pass
                     break
 
             # Periodically save state

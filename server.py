@@ -40,6 +40,10 @@ class CrawlRequest(BaseModel):
     state_path: Optional[str] = None
     synthesize_question: Optional[str] = None
     top_k_for_summary: int = 5
+    allowlist_patterns: Optional[List[str]] = None
+    denylist_patterns: Optional[List[str]] = None
+    allowlist_by_domain: Optional[Dict[str, List[str]]] = None
+    denylist_by_domain: Optional[Dict[str, List[str]]] = None
 
 class AskRequest(BaseModel):
     output_dir: str = "data"
@@ -83,6 +87,10 @@ def api_crawl(req: CrawlRequest):
         synthesize_question=req.synthesize_question,
         top_k_for_summary=req.top_k_for_summary,
         progress_callback=None,
+        allowlist_patterns=req.allowlist_patterns,
+        denylist_patterns=req.denylist_patterns,
+        allowlist_by_domain=req.allowlist_by_domain,
+        denylist_by_domain=req.denylist_by_domain,
     )
     return res
 
@@ -149,6 +157,20 @@ def get_report(output_dir: str = "data", file: str = "report.html"):
     except Exception as e:
         return HTMLResponse(content=f"<h1>Error</h1><p>{e}</p>", status_code=500)
 
+# Serve text files for preview
+@app.get("/text", response_class=HTMLResponse)
+def get_text(path: str):
+    if not path or not os.path.exists(path) or not path.endswith(".txt"):
+        return HTMLResponse(content=f"<h1>404</h1><p>Text file not found or invalid: {path}</p>", status_code=404)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Simple HTML wrapper for preview
+        safe = content.replace("<", "&lt;").replace(">", "&gt;")
+        return HTMLResponse(content=f"<html><body><pre>{safe}</pre></body></html>", status_code=200)
+    except Exception as e:
+        return HTMLResponse(content=f"<h1>Error</h1><p>{e}</p>", status_code=500)
+
 # SSE streaming of crawl progress
 try:
     from sse_starlette.sse import EventSourceResponse
@@ -193,6 +215,10 @@ async def stream_crawl(req: CrawlRequest):
                 synthesize_question=None,
                 top_k_for_summary=req.top_k_for_summary,
                 progress_callback=progress,
+                allowlist_patterns=req.allowlist_patterns,
+                denylist_patterns=req.denylist_patterns,
+                allowlist_by_domain=req.allowlist_by_domain,
+                denylist_by_domain=req.denylist_by_domain,
             )
         finally:
             done["value"] = True
