@@ -182,7 +182,7 @@ from uuid import uuid4
 from queue import Queue
 import threading
 
-JOBS: Dict[str, Dict] = {}  # job_id -> {"queue": Queue, "done": bool, "thread": Thread}
+JOBS: Dict[str, Dict] = {}  # job_id -> {"queue": Queue, "done": dict, "thread": Thread, "events_path": str, "cancel": dict, "output_dir": str}
 
 @app.post("/jobs")
 def create_job(req: CrawlRequest):
@@ -190,16 +190,30 @@ def create_job(req: CrawlRequest):
     job_id = str(uuid4())
     q: Queue = Queue()
     done = {"value": False}
+    cancel = {"value": False}
+    outdir = req.output_dir or "data"
+    jobs_dir = os.path.join(outdir, "jobs")
+    os.makedirs(jobs_dir, exist_ok=True)
+    events_path = os.path.join(jobs_dir, f"{job_id}.jsonl")
 
     def progress(event: Dict):
+        # persist to disk
+        try:
+            with open(events_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event) + "\n")
+        except Exception:
+            pass
         q.put(event)
+
+    def should_stop():
+        return cancel["value"]
 
     def run_crawl():
         try:
             crawl(
                 query=req.query,
                 urls=req.urls,
-                output_dir=req.output_dir,
+                output_dir=outdir,
                 max_results=req.max_results,
                 crawl_depth=req.crawl_depth,
                 max_pages_total=req.max_pages_total,
@@ -222,6 +236,7 @@ def create_job(req: CrawlRequest):
                 denylist_patterns=req.denylist_patterns,
                 allowlist_by_domain=req.allowlist_by_domain,
                 denylist_by_domain=req.denylist_by_domain,
+                should_stop=should_stop,
             )
         finally:
             done["value"] = True
@@ -229,7 +244,7 @@ def create_job(req: CrawlRequest):
 
     t = threading.Thread(target=run_crawl, daemon=True)
     t.start()
-    JOBS[job_id] = {"queue": q, "done": done, "thread": t}
+    JOBS[job_id] = {"queue": q, "done": done, "thread": t, "events_path": events_path, "cancel": cancel, "output_dir": outdir}
     return {"job_id": job_id}
 
 @app.get("/jobs/{job_id}/stream")
@@ -239,13 +254,25 @@ async def stream_job(job_id: str):
 
     job = JOBS.get(job_id)
     if not job:
+        # Try to stream from persisted events if available
+        # Assuming default data directory; in a real system, we'd index jobs by output_dir too.
         return {"error": f"job not found: {job_id}"}
 
     q: Queue = job["queue"]
     done = job["done"]
+    events_path = job.get("events_path")
 
     async def event_generator():
         import asyncio
+        # First, yield persisted events if any
+        if events_path and os.path.exists(events_path):
+            try:
+                with open(events_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        yield {"event": "progress", "data": line.strip()}
+            except Exception:
+                pass
+        # Then live events
         while not done["value"] or not q.empty():
             try:
                 ev = q.get(timeout=0.5)
@@ -312,6 +339,47 @@ async def stream_crawl(req: CrawlRequest):
                 await asyncio.sleep(0.1)
 
     return EventSourceResponse(event_generator())
+
+# Job status and cancellation
+@app.get("/jobs/{job_id}/status")
+def job_status(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        return {"error": f"job not found: {job_id}"}
+    done = job["done"]["value"]
+    # Read last event if exists
+    last_event = None
+    events_path = job.get("events_path")
+    if events_path and os.path.exists(events_path):
+        try:
+            with open(events_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                # Read last line efficiently
+                chunk = 1024
+                data = b""
+                while size > 0:
+                    size = max(0, size - chunk)
+                    f.seek(size)
+                    data = f.read(chunk) + data
+                    if b"\n" in data:
+                        break
+                lines = data.split(b"\n")
+                for line in reversed(lines):
+                    if line.strip():
+                        last_event = json.loads(line.decode("utf-8"))
+                        break
+        except Exception:
+            pass
+    return {"done": done, "last_event": last_event}
+
+@app.delete("/jobs/{job_id}")
+def cancel_job(job_id: str):
+    job = JOBS.get(job_id)
+    if not job:
+        return {"error": f"job not found: {job_id}"}
+    job["cancel"]["value"] = True
+    return {"job_id": job_id, "cancelled": True}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

@@ -128,6 +128,12 @@
   <h2>Response</h2>
   <pre id="resp"></pre>
 
+  <h2>Live Metrics</h2>
+  <div class="card">
+    <canvas id="metricsChart" width="800" height="300"></canvas>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
     function getFormData(form) {
       const data = {};
@@ -167,6 +173,41 @@
     const progressLog = document.getElementById("progressLog");
     const jobIdEl = document.getElementById("jobId");
     const patternValidation = document.getElementById("patternValidation");
+
+    // Chart.js setup
+    const ctx = document.getElementById("metricsChart").getContext("2d");
+    const metricsData = {
+      labels: [],
+      datasets: [
+        { label: "Completed", data: [], borderColor: "#0b5ed7", fill: false },
+        { label: "Errors", data: [], borderColor: "#c62828", fill: false },
+        { label: "OK", data: [], borderColor: "#1a7f37", fill: false },
+      ],
+    };
+    const metricsChart = new Chart(ctx, {
+      type: "line",
+      data: metricsData,
+      options: {
+        responsive: false,
+        animation: false,
+        scales: { x: { display: true }, y: { beginAtZero: true } },
+      },
+    });
+
+    function updateChart(ev) {
+      if (!ev || !ev.stats) return;
+      const stats = ev.stats;
+      let total_ok = 0, total_err = 0;
+      Object.values(stats).forEach(s => {
+        total_ok += (s.ok || 0);
+        total_err += (s.fetch_error || 0) + (s.extraction_failed || 0) + (s.error || 0);
+      });
+      metricsData.labels.push(new Date().toLocaleTimeString());
+      metricsData.datasets[0].data.push(ev.completed || 0);
+      metricsData.datasets[1].data.push(total_err);
+      metricsData.datasets[2].data.push(total_ok);
+      metricsChart.update();
+    }
 
     document.getElementById("crawlForm").addEventListener("submit", async (e) => {
       e.preventDefault();

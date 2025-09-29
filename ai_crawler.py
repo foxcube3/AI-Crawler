@@ -591,6 +591,8 @@ def crawl(
     denylist_patterns: Optional[List[str]] = None,
     allowlist_by_domain: Optional[Dict[str, List[str]]] = None,
     denylist_by_domain: Optional[Dict[str, List[str]]] = None,
+    should_stop: Optional[callable] = None,
+    domain_delay_overrides: Optional[Dict[str, float]] = None,
 ) -> Dict[str, List[Dict]]:
     ensure_dir(output_dir)
     discovered: List[str] = []
@@ -631,13 +633,24 @@ def crawl(
 
     ua_rotator = UserAgentRotator(user_agents or DEFAULT_USER_AGENTS)
     rate_limiter = PerDomainRateLimiter(default_delay=per_domain_delay)
+    # Apply domain-specific delay overrides at start
+    if domain_delay_overrides:
+        for dom, dly in domain_delay_overrides.items():
+            try:
+                rate_limiter.set_delay(dom, float(dly))
+            except Exception:
+                continue
     inflight_by_domain: Dict[str, int] = {}
 
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as executor:
         futures: Dict = {}
         while (len(frontier) > 0 or futures) and len(results) < max_pages_total:
+            if should_stop and should_stop():
+                break
             # Launch tasks respecting per-domain concurrency caps
             while len(futures) < concurrency and len(results) + len(futures) < max_pages_total and len(frontier) > 0:
+                if should_stop and should_stop():
+                    break
                 popped = frontier.pop()
                 if not popped:
                     break
@@ -647,7 +660,24 @@ def crawl(
                     frontier.push(current_url, depth)
                     break
                 inflight_by_domain[domain] = inflight_by_domain.get(domain, 0) + 1
-                fut = executor.submit(process_url, current_url, depth, output_dir, timeout, allow_external, crawl_depth, ua_rotator, rate_limiter, max_retries, backoff_base, backoff_jitter)
+                fut = executor.submit(
+                    process_url,
+                    current_url,
+                    depth,
+                    output_dir,
+                    timeout,
+                    allow_external,
+                    crawl_depth,
+                    ua_rotator,
+                    rate_limiter,
+                    max_retries,
+                    backoff_base,
+                    backoff_jitter,
+                    allowlist_patterns,
+                    denylist_patterns,
+                    allowlist_by_domain,
+                    denylist_by_domain,
+                )
                 futures[fut] = (current_url, depth, domain)
 
             if futures:
