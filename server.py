@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import uvicorn
 import os
+import sys
 import json
 import time
 import threading
@@ -133,8 +134,16 @@ def _load_schedules_from_disk():
 # Jinja2 environment for minimal frontend
 try:
     from jinja2 import Environment, FileSystemLoader, select_autoescape
+    # Use bundled templates if running as PyInstaller executable
+    templates_base = os.path.join(os.getcwd(), "templates")
+    try:
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            templates_base = os.path.join(meipass, "templates")
+    except Exception:
+        pass
     env = Environment(
-        loader=FileSystemLoader(searchpath=os.path.join(os.getcwd(), "templates")),
+        loader=FileSystemLoader(searchpath=templates_base),
         autoescape=select_autoescape(["html"])
     )
 except Exception:
