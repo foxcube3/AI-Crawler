@@ -10,6 +10,78 @@ from typing import Optional, List, Dict
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
 
+# Schedules persistence helpers
+def _schedules_file(output_dir: Optional[str] = None) -> str:
+    out = output_dir or "data"
+    try:
+        os.makedirs(out, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(out, "schedules.json")
+
+def _serialize_schedule(schedule_id: str, sched: Dict) -> Dict:
+    return {
+        "schedule_id": schedule_id,
+        "interval_seconds": sched.get("interval", 0),
+        "params": sched.get("params").dict() if hasattr(sched.get("params"), "dict") else sched.get("params"),
+        "output_dir": (sched.get("params").output_dir if hasattr(sched.get("params"), "output_dir") else sched.get("output_dir", "data")),
+        "created_at": sched.get("created_at", time.time()),
+        "active": True,
+    }
+
+def _save_schedules():
+    # Persist all schedules to the default "data" dir and to each schedule's output_dir for redundancy
+    items = []
+    for sid, s in SCHEDULES.items():
+        try:
+            items.append(_serialize_schedule(sid, s))
+        except Exception:
+            continue
+    # Default write
+    try:
+        with open(_schedules_file("data"), "w", encoding="utf-8") as f:
+            json.dump({"schedules": items}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    # Per-output-dir write
+    by_outdir: Dict[str, List[Dict]] = {}
+    for it in items:
+        od = it.get("output_dir") or "data"
+        by_outdir.setdefault(od, []).append(it)
+    for od, lst in by_outdir.items():
+        try:
+            with open(_schedules_file(od), "w", encoding="utf-8") as f:
+                json.dump({"schedules": lst}, f, ensure_ascii=False, indent=2)
+        except Exception:
+            continue
+
+def _load_schedules_from_disk():
+    # Load schedules from default "data/schedules.json"
+    path = _schedules_file("data")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for it in (data.get("schedules") or []):
+            try:
+                sid = it.get("schedule_id") or str(time.time())
+                if sid in SCHEDULES:
+                    continue
+                # Recreate CrawlRequest from dict
+                params_dict = it.get("params") or {}
+                # Minimal recreation; validation handled by Pydantic
+                params = CrawlRequest(**params_dict)
+                cancel = {"value": False}
+                SCHEDULES[sid] = {"interval": int(it.get("interval_seconds", 0)), "params": params, "cancel": cancel, "created_at": it.get("created_at", time.time())}
+                t = threading.Thread(target=_schedule_loop, args=(sid,), daemon=True)
+                SCHEDULES[sid]["thread"] = t
+                t.start()
+            except Exception:
+                continue
+    except Exception:
+        pass
+
 # Jinja2 environment for minimal frontend
 try:
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -558,17 +630,28 @@ def _schedule_loop(schedule_id: str):
 def create_schedule(req: ScheduleRequest):
     schedule_id = str(uuid4())
     cancel = {"value": False}
-    SCHEDULES[schedule_id] = {"interval": req.interval_seconds, "params": req.params, "cancel": cancel}
+    SCHEDULES[schedule_id] = {"interval": req.interval_seconds, "params": req.params, "cancel": cancel, "created_at": time.time()}
     t = threading.Thread(target=_schedule_loop, args=(schedule_id,), daemon=True)
     SCHEDULES[schedule_id]["thread"] = t
     t.start()
+    _save_schedules()
     return {"schedule_id": schedule_id}
 
 @app.get("/schedules")
-def list_schedules():
+def list_schedules(output_dir: str = "data"):
+    # Combine in-memory schedules with persisted ones if any
     items = []
     for sid, s in SCHEDULES.items():
-        items.append({"schedule_id": sid, "interval_seconds": s["interval"], "params": s["params"].dict()})
+        items.append({"schedule_id": sid, "interval_seconds": s["interval"], "params": s["params"].dict(), "created_at": s.get("created_at", time.time())})
+    # Read persisted file (optional)
+    try:
+        with open(_schedules_file(output_dir), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for it in (data.get("schedules") or []):
+            if not any(x["schedule_id"] == it.get("schedule_id") for x in items):
+                items.append(it)
+    except Exception:
+        pass
     return {"schedules": items}
 
 @app.delete("/schedules/{schedule_id}")
@@ -577,7 +660,19 @@ def delete_schedule(schedule_id: str):
     if not s:
         return {"error": f"schedule not found: {schedule_id}"}
     s["cancel"]["value"] = True
+    # Remove from in-memory store and persist update
+    try:
+        del SCHEDULES[schedule_id]
+    except Exception:
+        pass
+    _save_schedules()
     return {"schedule_id": schedule_id, "cancelled": True}
+
+# Load schedules on startup (best-effort)
+try:
+    _load_schedules_from_disk()
+except Exception:
+    pass
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

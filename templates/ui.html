@@ -139,7 +139,7 @@ logout
     <canvas id="metricsChart" width="800" height="300"></canvas>
   </div>
   <div class="card">
-    <strong>Per-domain totals</strong>
+    <strong>Per-domain stats</strong>
     <canvas id="domainChart" width="800" height="300"></canvas>
   </div>
 
@@ -147,6 +147,17 @@ logout
   <div class="card">
     <button id="refreshJobs">Refresh Jobs</button>
     <ul id="jobsList"></ul>
+  </div>
+
+  <h2>Schedules</h2>
+  <div class="card">
+    <form id="scheduleForm">
+      <label>Interval (seconds)</label>
+      <input type="number" name="interval_seconds" value="3600">
+      <button type="submit">Create Schedule (uses current Crawl form params)</button>
+    </form>
+    <button id="refreshSchedules">Refresh Schedules</button>
+    <ul id="schedulesList"></ul>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -218,33 +229,76 @@ logout
     const dctx = document.getElementById("domainChart").getContext("2d");
     const domainChart = new Chart(dctx, {
       type: "bar",
-      data: { labels: [], datasets: [{ label: "Total", data: [], backgroundColor: "#0b5ed7" }] },
-      options: { responsive: false, animation: false, scales: { x: { display: true }, y: { beginAtZero: true } } },
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Total", data: [], backgroundColor: "#0b5ed7", yAxisID: "y" },
+          { label: "Avg Latency (ms)", data: [], type: "line", borderColor: "#ffa726", backgroundColor: "#ffa726", yAxisID: "y1" },
+          { label: "Error Rate (%)", data: [], type: "line", borderColor: "#ef5350", backgroundColor: "#ef5350", yAxisID: "y1" },
+        ],
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        scales: {
+          x: { display: true },
+          y: { beginAtZero: true, position: "left", title: { display: true, text: "Total" } },
+          y1: { beginAtZero: true, position: "right", title: { display: true, text: "Latency / Error %" } },
+        },
+      },
     });
-
-    function updateChart(ev) {
-      if (!ev || !ev.stats) return;
-      const stats = ev.stats;
-      let total_ok = 0, total_err = 0;
-      Object.values(stats).forEach(s => {
-        total_ok += (s.ok || 0);
-        total_err += (s.fetch_error || 0) + (s.extraction_failed || 0) + (s.error || 0);
-      });
-      metricsData.labels.push(new Date().toLocaleTimeString());
-      metricsData.datasets[0].data.push(ev.completed || 0);
-      metricsData.datasets[1].data.push(total_err);
-      metricsData.datasets[2].data.push(total_ok);
-      metricsChart.update();
-    }
 
     function updateDomainChart(stats) {
       if (!stats) return;
       const labels = Object.keys(stats);
-      const data = labels.map(dom => stats[dom].total || 0);
+      const totals = labels.map(dom => stats[dom].total || 0);
+      const avgms = labels.map(dom => Math.round(stats[dom].avg_ms || 0));
+      const errpct = labels.map(dom => {
+        const s = stats[dom];
+        const errs = (s.fetch_error || 0) + (s.extraction_failed || 0) + (s.error || 0);
+        const total = s.total || 1;
+        return Math.round((errs / total) * 100);
+      });
       domainChart.data.labels = labels;
-      domainChart.data.datasets[0].data = data;
+      domainChart.data.datasets[0].data = totals;
+      domainChart.data.datasets[1].data = avgms;
+      domainChart.data.datasets[2].data = errpct;
       domainChart.update();
     }
+
+    // ---- Schedules UI ----
+    async function refreshSchedules() {
+      const outdir = document.querySelector('input[name="output_dir"]').value || "data";
+      const data = await getJSON("/schedules?output_dir=" + encodeURIComponent(outdir));
+      const list = document.getElementById("schedulesList");
+      list.innerHTML = "";
+      (data.schedules || []).forEach(s => {
+        const li = document.createElement("li");
+        li.innerHTML = "<strong>" + s.schedule_id + "</strong> — every " + s.interval_seconds + "s — created " + (s.created_at ? new Date(s.created_at*1000).toLocaleString() : "") +
+          " — output_dir: " + (s.params && s.params.output_dir ? s.params.output_dir : (s.output_dir || "data"));
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = async () => {
+          await fetch("/schedules/" + s.schedule_id, { method: "DELETE" });
+          refreshSchedules();
+        };
+        li.appendChild(cancelBtn);
+        list.appendChild(li);
+      });
+    }
+
+    document.getElementById("refreshSchedules").addEventListener("click", refreshSchedules);
+    document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const interval = Number(new FormData(e.target).get("interval_seconds"));
+      const crawlParams = getFormData(document.getElementById("crawlForm"));
+      const payload = { interval_seconds: interval, params: crawlParams };
+      const res = await postJSON("/schedules", payload);
+      resp.textContent = JSON.stringify(res, null, 2);
+      refreshSchedules();
+    });
+    // Initial schedules load
+    refreshSchedules();
 
     // Jobs dashboard
     async function refreshJobs() {
