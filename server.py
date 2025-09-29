@@ -708,6 +708,32 @@ def list_jobs(output_dir: str = "data"):
                 continue
     return {"jobs": jobs}
 
+def _compute_job_summary(job_id: str) -> Dict[str, float]:
+    # Aggregate totals, ok, errors, avg_ms across events for a job
+    rows = _db_query("SELECT data_json FROM events WHERE job_id=?", (job_id,))
+    total = 0
+    ok = 0
+    errors = 0
+    durations = []
+    for (dj,) in rows:
+        try:
+            ev = json.loads(dj)
+            res = ev.get("result")
+            if isinstance(res, dict) and res.get("url"):
+                total += 1
+                status = res.get("status")
+                if status == "ok":
+                    ok += 1
+                elif status in ("fetch_error", "extraction_failed", "error"):
+                    errors += 1
+                dur = res.get("duration_ms")
+                if isinstance(dur, (int, float)):
+                    durations.append(float(dur))
+        except Exception:
+            continue
+    avg_ms = sum(durations) / len(durations) if durations else 0.0
+    return {"total": total, "ok": ok, "errors": errors, "avg_ms": avg_ms}
+
 @app.get("/jobs-ui", response_class=HTMLResponse)
 def jobs_ui(
     output_dir: str = "data",
@@ -779,6 +805,14 @@ def jobs_ui(
     start_idx = (page - 1) * page_size
     end_idx = min(total, start_idx + page_size)
     jobs_page = jobs[start_idx:end_idx]
+
+    # Compute summaries for displayed jobs only
+    summaries: Dict[str, Dict[str, float]] = {}
+    for j in jobs_page:
+        jid = j.get("job_id")
+        if jid:
+            summaries[jid] = _compute_job_summary(jid)
+
     if env:
         try:
             tmpl = env.get_template("jobs.html")
@@ -794,12 +828,94 @@ def jobs_ui(
                 start=start or "",
                 end=end or "",
                 domain=dom,
+                summaries=summaries,
             )
         except Exception:
             pass
     # Fallback simple HTML
     items = "".join(f"<li>{j['job_id']}</li>" for j in jobs_page)
     return HTMLResponse(f"<h1>Jobs</h1><p>Total: {total} — Page {page} / {pages}</p><ul>{items}</ul>", status_code=200)
+
+@app.get("/jobs-csv")
+def jobs_csv(
+    output_dir: str = "data",
+    status: str = "all",
+    q: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    domain: Optional[str] = None,
+):
+    # Apply the same filtering without pagination, export CSV
+    data = list_jobs(output_dir=output_dir)
+    jobs = data.get("jobs", [])
+    status = (status or "all").lower()
+    q_val = (q or "").strip().lower()
+    if q_val:
+        jobs = [j for j in jobs if q_val in j.get("job_id", "").lower()]
+
+    def parse_dt(s: Optional[str]) -> Optional[float]:
+        if not s:
+            return None
+        try:
+            return datetime.strptime(s, "%Y-%m-%dT%H:%M").timestamp()
+        except Exception:
+            try:
+                return float(s)
+            except Exception:
+                return None
+
+    start_ts = parse_dt(start)
+    end_ts = parse_dt(end)
+    if start_ts is not None:
+        jobs = [j for j in jobs if float(j.get("meta", {}).get("created_at", 0.0)) >= start_ts]
+    if end_ts is not None:
+        jobs = [j for j in jobs if float(j.get("meta", {}).get("created_at", 0.0)) <= end_ts]
+
+    dom = (domain or "").strip().lower()
+    if dom:
+        try:
+            rows = _db_query("SELECT DISTINCT job_id FROM events WHERE data_json LIKE ?", (f'%"domain":"{dom}"%',))
+            allowed_ids = {jid for (jid,) in rows}
+            jobs = [j for j in jobs if j.get("job_id") in allowed_ids]
+        except Exception:
+            jobs = []
+
+    if status in {"active", "running"}:
+        jobs = [j for j in jobs if j.get("active")]
+    elif status in {"done", "completed"}:
+        jobs = [j for j in jobs if j.get("done")]
+    elif status in {"pending"}:
+        jobs = [j for j in jobs if (not j.get("active")) and (not j.get("done"))]
+
+    # Sort
+    try:
+        jobs.sort(key=lambda j: float(j.get("meta", {}).get("created_at", 0.0)), reverse=True)
+    except Exception:
+        pass
+
+    # Build CSV
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["job_id", "status", "created_at", "completed_at", "total", "ok", "errors", "avg_ms", "reports"])
+    for j in jobs:
+        jid = j.get("job_id")
+        meta = j.get("meta", {})
+        stat = _compute_job_summary(jid)
+        writer.writerow([
+            jid,
+            ("running" if j.get("active") and not j.get("done") else ("done" if j.get("done") else "pending")),
+            meta.get("created_at"),
+            meta.get("completed_at"),
+            stat.get("total"),
+            stat.get("ok"),
+            stat.get("errors"),
+            round(stat.get("avg_ms", 0.0), 2),
+            len(meta.get("report_pages") or []),
+        ])
+    from fastapi.responses import Response
+    return Response(content=buf.getvalue(), media_type="text/csv")
 
 @app.get("/jobs/{job_id}")
 def job_detail(job_id: str, output_dir: str = "data"):
