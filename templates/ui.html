@@ -64,7 +64,23 @@
       <div id="progress" class="card" style="margin-top:12px;">
         <strong>Progress</strong>
         <div class="muted">Live updates via SSE</div>
+        <div class="muted" id="jobId"></div>
         <pre id="progressLog"></pre>
+      </div>
+
+      <div class="card">
+        <strong>Domain allow/deny editor tips</strong>
+        <ul class="muted">
+          <li>Allowlist/Denylist patterns are regular expressions. If a regex fails, we fallback to simple substring checks.</li>
+          <li>Per-domain mappings use JSON: {"domain.com": ["pattern1", "pattern2"]}</li>
+          <li>Examples:
+            <ul>
+              <li>Allow arxiv abstracts only: {"arxiv.org": ["^https?://arxiv\\.org/abs/"]}</li>
+              <li>Deny login/admin pages: {"example.com": ["login", "admin"]}</li>
+            </ul>
+          </li>
+        </ul>
+        <div id="patternValidation" class="muted"></div>
       </div>
     </div>
 
@@ -149,6 +165,8 @@
 
     const resp = document.getElementById("resp");
     const progressLog = document.getElementById("progressLog");
+    const jobIdEl = document.getElementById("jobId");
+    const patternValidation = document.getElementById("patternValidation");
 
     document.getElementById("crawlForm").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -157,16 +175,41 @@
       resp.textContent = JSON.stringify(json, null, 2);
     });
 
+    // Validate allow/deny patterns on input change
+    function validatePatterns() {
+      const form = document.getElementById("crawlForm");
+      const data = getFormData(form);
+      const warnings = [];
+      function validateList(list, label) {
+        if (!list) return;
+        list.forEach(p => {
+          try { new RegExp(p); } catch (e) { warnings.push(label + " invalid regex: " + p); }
+        });
+      }
+      validateList(data.allowlist_patterns, "Allowlist");
+      validateList(data.denylist_patterns, "Denylist");
+      if (data.allowlist_by_domain) {
+        Object.entries(data.allowlist_by_domain).forEach(([dom, lst]) => validateList(lst, "Allowlist[" + dom + "]"));
+      }
+      if (data.denylist_by_domain) {
+        Object.entries(data.denylist_by_domain).forEach(([dom, lst]) => validateList(lst, "Denylist[" + dom + "]"));
+      }
+      patternValidation.textContent = warnings.length ? ("Warnings:\\n" + warnings.join("\\n")) : "Patterns look ok.";
+    }
+    document.querySelectorAll('textarea[name="allowlist_patterns"], textarea[name="denylist_patterns"], textarea[name="allowlist_by_domain"], textarea[name="denylist_by_domain"]').forEach(el => {
+      el.addEventListener("input", validatePatterns);
+    });
+    validatePatterns();
+
     document.getElementById("streamBtn").addEventListener("click", async (e) => {
       const form = document.getElementById("crawlForm");
       const data = getFormData(form);
+      // Create job
+      const job = await postJSON("/jobs", data);
+      jobIdEl.textContent = "Job ID: " + job.job_id;
       progressLog.textContent = "";
-      const es = new EventSource("/stream-crawl", { withCredentials: false });
-      // Send body with POST is not supported by EventSource; emulate via a fetch to start stream? 
-      // Here we fallback to starting stream with defaults; for full control, use /crawl or a client lib.
-      // Alternatively, you can use a small bridge endpoint; omitted for brevity.
-      // Display a note:
-      progressLog.textContent += "Note: Stream uses server defaults; adjust via /crawl.\n";
+      // Connect to job stream
+      const es = new EventSource("/jobs/" + job.job_id + "/stream");
       es.onmessage = (ev) => {
         try {
           const obj = JSON.parse(ev.data);

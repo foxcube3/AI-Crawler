@@ -177,13 +177,89 @@ try:
 except Exception:
     EventSourceResponse = None
 
+# In-memory job store
+from uuid import uuid4
+from queue import Queue
+import threading
+
+JOBS: Dict[str, Dict] = {}  # job_id -> {"queue": Queue, "done": bool, "thread": Thread}
+
+@app.post("/jobs")
+def create_job(req: CrawlRequest):
+    # Create a job, start a crawl thread, return job_id
+    job_id = str(uuid4())
+    q: Queue = Queue()
+    done = {"value": False}
+
+    def progress(event: Dict):
+        q.put(event)
+
+    def run_crawl():
+        try:
+            crawl(
+                query=req.query,
+                urls=req.urls,
+                output_dir=req.output_dir,
+                max_results=req.max_results,
+                crawl_depth=req.crawl_depth,
+                max_pages_total=req.max_pages_total,
+                timeout=req.timeout,
+                allow_external=req.allow_external,
+                concurrency=req.concurrency,
+                per_domain_delay=req.per_domain_delay,
+                user_agents=None,
+                per_domain_concurrency=req.per_domain_concurrency,
+                max_retries=req.max_retries,
+                backoff_base=req.backoff_base,
+                backoff_jitter=req.backoff_jitter,
+                save_state=req.save_state,
+                resume=req.resume,
+                state_path=req.state_path,
+                synthesize_question=None,
+                top_k_for_summary=req.top_k_for_summary,
+                progress_callback=progress,
+                allowlist_patterns=req.allowlist_patterns,
+                denylist_patterns=req.denylist_patterns,
+                allowlist_by_domain=req.allowlist_by_domain,
+                denylist_by_domain=req.denylist_by_domain,
+            )
+        finally:
+            done["value"] = True
+            q.put({"event": "complete"})
+
+    t = threading.Thread(target=run_crawl, daemon=True)
+    t.start()
+    JOBS[job_id] = {"queue": q, "done": done, "thread": t}
+    return {"job_id": job_id}
+
+@app.get("/jobs/{job_id}/stream")
+async def stream_job(job_id: str):
+    if EventSourceResponse is None:
+        return {"error": "SSE not available (install sse-starlette)."}
+
+    job = JOBS.get(job_id)
+    if not job:
+        return {"error": f"job not found: {job_id}"}
+
+    q: Queue = job["queue"]
+    done = job["done"]
+
+    async def event_generator():
+        import asyncio
+        while not done["value"] or not q.empty():
+            try:
+                ev = q.get(timeout=0.5)
+                yield {"event": "progress", "data": json.dumps(ev)}
+            except Exception:
+                await asyncio.sleep(0.1)
+
+    return EventSourceResponse(event_generator())
+
+# Legacy single-shot stream endpoint retained for convenience
 @app.post("/stream-crawl")
 async def stream_crawl(req: CrawlRequest):
     if EventSourceResponse is None:
         return {"error": "SSE not available (install sse-starlette)."}
-
-    from queue import Queue
-    import threading
 
     q: Queue = Queue()
     done = {"value": False}
@@ -227,6 +303,7 @@ async def stream_crawl(req: CrawlRequest):
     threading.Thread(target=run_crawl, daemon=True).start()
 
     async def event_generator():
+        import asyncio
         while not done["value"] or not q.empty():
             try:
                 ev = q.get(timeout=0.5)
@@ -234,7 +311,6 @@ async def stream_crawl(req: CrawlRequest):
             except Exception:
                 await asyncio.sleep(0.1)
 
-    import asyncio
     return EventSourceResponse(event_generator())
 
 if __name__ == "__main__":
