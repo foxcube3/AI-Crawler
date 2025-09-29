@@ -29,6 +29,8 @@ def _init_db():
         cur = conn.cursor()
         cur.execute("CREATE TABLE IF NOT EXISTS schedules (schedule_id TEXT PRIMARY KEY, interval_seconds INTEGER, cron_expr TEXT, params_json TEXT, created_at REAL, active INTEGER)")
         cur.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, output_dir TEXT, created_at REAL, completed_at REAL, status TEXT)")
+        # Persist crawl events for analytics
+        cur.execute("CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, ts REAL, type TEXT, data_json TEXT)")
         conn.commit()
     finally:
         conn.close()
@@ -262,6 +264,51 @@ def ui():
     <p>Frontend template not found. Use API endpoints: /crawl, /build-index, /ask, /report</p>
     </body></html>"""
 
+@app.get("/jobs/{job_id}/detail", response_class=HTMLResponse)
+def job_detail_page(job_id: str):
+    if env:
+        try:
+            tmpl = env.get_template("job_detail.html")
+            return tmpl.render(job_id=job_id)
+        except Exception:
+            pass
+    return HTMLResponse(f"<h1>Job {job_id}</h1><p>Template not found. Use /jobs/{job_id} for JSON.</p>", status_code=200)
+
+@app.get("/validate-cron")
+def validate_cron(expr: str):
+    if not expr:
+        return {"valid": False, "error": "empty"}
+    if croniter is None:
+        return {"valid": False, "error": "croniter not installed"}
+    try:
+        base = time.time()
+        it = croniter(expr, base)
+        next_run = it.get_next(float)
+        return {"valid": True, "next_run_epoch": next_run}
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+@app.get("/analytics/domain-stats")
+def analytics_domain_stats(job_id: Optional[str] = None):
+    # Aggregate domain stats from DB events (type='result')
+    where = ""
+    args: List = []
+    if job_id:
+        where = "WHERE job_id=?"
+        args = [job_id]
+    rows = _db_query(f"SELECT data_json FROM events {where}", tuple(args))
+    results: List[CrawlResult] = []
+    for (dj,) in rows:
+        try:
+            ev = json.loads(dj)
+            res = ev.get("result")
+            if isinstance(res, dict) and res.get("url"):
+                results.append(CrawlResult(**res))
+        except Exception:
+            continue
+    stats = compute_domain_stats(results) if results else {}
+    return {"count": len(results), "stats": stats}
+
 # Serve generated report pages directly
 @app.get("/reports", response_class=HTMLResponse)
 def get_report(output_dir: str = "data", file: str = "report.html"):
@@ -338,6 +385,11 @@ def create_job(req: CrawlRequest):
         try:
             with open(events_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event) + "\n")
+        except Exception:
+            pass
+        # persist to DB for analytics
+        try:
+            _db_execute("INSERT INTO events(job_id, ts, type, data_json) VALUES(?,?,?,?)", (job_id, time.time(), event.get("type") or "result", json.dumps(event)))
         except Exception:
             pass
         q.put(event)

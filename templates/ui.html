@@ -292,9 +292,18 @@ logout
     document.getElementById("refreshSchedules").addEventListener("click", refreshSchedules);
     document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const interval = Number(new FormData(e.target).get("interval_seconds"));
+      const fd = new FormData(e.target);
+      const interval = Number(fd.get("interval_seconds"));
+      const cron = (fd.get("cron_expr") || "").trim();
+      if (cron) {
+        const v = await getJSON("/validate-cron?expr=" + encodeURIComponent(cron));
+        if (!v.valid) {
+          alert("Invalid cron expression: " + (v.error || ""));
+          return;
+        }
+      }
       const crawlParams = getFormData(document.getElementById("crawlForm"));
-      const payload = { interval_seconds: interval, params: crawlParams };
+      const payload = { interval_seconds: interval || null, cron_expr: cron || null, params: crawlParams };
       const res = await postJSON("/schedules", payload);
       resp.textContent = JSON.stringify(res, null, 2);
       refreshSchedules();
