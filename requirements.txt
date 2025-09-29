@@ -1,0 +1,4 @@
+requests>=2.31.0
+beautifulsoup4>=4.12.3
+trafilatura>=1.6.3
+duckduckgo-search>=6.3.5
