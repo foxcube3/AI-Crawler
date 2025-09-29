@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AI Crawler Assistant</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.5rem; }
+    .muted { color: #666; }
+    form { border: 1px solid #ddd; padding: 12px; border-radius: 8px; margin-bottom: 16px; }
+    label { display: block; margin: 8px 0 4px; }
+    input[type="text"], input[type="number"] { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 6px; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #0b5ed7; color: #fff; cursor: pointer; }
+    button:hover { background: #0949a6; }
+    pre { white-space: pre-wrap; background: #f9f9f9; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  </style>
+</head>
+<body>
+  <h1>AI Crawler Assistant</h1>
+  <p class="muted">Simple frontend to trigger crawls, build index, ask questions, and generate reports.</p>
+
+  <div class="grid">
+    <div>
+      <h2>Crawl</h2>
+      <form id="crawlForm">
+        <label>Query</label>
+        <input type="text" name="query" placeholder="e.g. retrieval augmented generation">
+        <label>URLs (space-separated)</label>
+        <input type="text" name="urls" placeholder="e.g. https://arxiv.org/ https://pytorch.org/">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Crawl depth</label>
+        <input type="number" name="crawl_depth" value="1">
+        <label>Max pages total</label>
+        <input type="number" name="max_pages_total" value="50">
+        <label>Allow external links</label>
+        <input type="checkbox" name="allow_external" checked>
+        <label>Concurrency</label>
+        <input type="number" name="concurrency" value="4">
+        <label>Per-domain concurrency</label>
+        <input type="number" name="per_domain_concurrency" value="2">
+        <label>Per-domain delay (s)</label>
+        <input type="number" name="per_domain_delay" value="0.5" step="0.1">
+        <label>Retries</label>
+        <input type="number" name="max_retries" value="2">
+        <label>Backoff base</label>
+        <input type="number" name="backoff_base" value="0.5" step="0.1">
+        <label>Domain delay overrides (JSON: domain -> seconds)</label>
+        <textarea name="domain_delay_overrides" rows="3" placeholder='e.g. {"arxiv.org": 1.0, "pytorch.org": 0.8}'></textarea>
+        <label>Allowlist patterns (regex, one per line)</label>
+        <textarea name="allowlist_patterns" rows="4" placeholder="e.g.
+^https?://(www\.)?arxiv.org/
+blog"></textarea>
+        <label>Denylist patterns (regex, one per line)</label>
+        <textarea name="denylist_patterns" rows="4" placeholder="e.g.
+logout
+\?replytocom="></textarea>
+        <label>Per-domain allowlist (JSON mapping domain -> [patterns])</label>
+        <textarea name="allowlist_by_domain" rows="3" placeholder='e.g. {"arxiv.org": ["^https?://arxiv.org/abs/"]}'></textarea>
+        <label>Per-domain denylist (JSON mapping domain -> [patterns])</label>
+        <textarea name="denylist_by_domain" rows="3" placeholder='e.g. {"example.com": ["^https?://example.com/admin"]}'></textarea>
+        <label>Save state</label>
+        <input type="checkbox" name="save_state">
+        <label>Resume</label>
+        <input type="checkbox" name="resume">
+        <button type="submit">Start Crawl</button>
+        <button id="streamBtn" type="button">Start Stream Crawl</button>
+      </form>
+      <div id="progress" class="card" style="margin-top:12px;">
+        <strong>Progress</strong>
+        <div class="muted">Live updates via SSE</div>
+        <div class="muted" id="jobId"></div>
+        <pre id="progressLog"></pre>
+      </div>
+
+      <div class="card">
+        <strong>Domain allow/deny editor tips</strong>
+        <ul class="muted">
+          <li>Allowlist/Denylist patterns are regular expressions. If a regex fails, we fallback to simple substring checks.</li>
+          <li>Per-domain mappings use JSON: {"domain.com": ["pattern1", "pattern2"]}</li>
+          <li>Examples:
+            <ul>
+              <li>Allow arxiv abstracts only: {"arxiv.org": ["^https?://arxiv\\.org/abs/"]}</li>
+              <li>Deny login/admin pages: {"example.com": ["login", "admin"]}</li>
+            </ul>
+          </li>
+        </ul>
+        <div id="patternValidation" class="muted"></div>
+      </div>
+    </div>
+
+    <div>
+      <h2>Index & Ask</h2>
+      <form id="indexForm">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Model name</label>
+        <input type="text" name="model_name" value="sentence-transformers/all-MiniLM-L6-v2">
+        <button type="submit">Build Index</button>
+      </form>
+
+      <form id="askForm">
+        <label>Output dir</label>
+        <input type="text" name="output_dir" value="data">
+        <label>Question</label>
+        <input type="text" name="question" placeholder="e.g. What are key benefits of RAG?">
+        <label>Top K</label>
+        <input type="number" name="top_k" value="5">
+        <label>Synthesize answer</label>
+        <input type="checkbox" name="synthesize" checked>
+        <button type="submit">Ask</button>
+      </form>
+    </div>
+  </div>
+
+  <h2>Report</h2>
+  <form id="reportForm">
+    <label>Output dir</label>
+    <input type="text" name="output_dir" value="data">
+    <label>Question (optional)</label>
+    <input type="text" name="question" placeholder="Optional question for Q&A in report">
+    <label>Top K</label>
+    <input type="number" name="top_k" value="5">
+    <label>Synthesize</label>
+    <input type="checkbox" name="synthesize" checked>
+    <label>Page size</label>
+    <input type="number" name="page_size" value="50">
+    <label>Theme</label>
+    <input type="text" name="theme" value="light">
+    <button type="submit">Generate Report</button>
+  </form>
+
+  <h2>Response</h2>
+  <pre id="resp"></pre>
+
+  <h2>Live Metrics</h2>
+  <div class="card">
+    <canvas id="metricsChart" width="800" height="300"></canvas>
+  </div>
+  <div class="card">
+    <strong>Per-domain stats</strong>
+    <canvas id="domainChart" width="800" height="300"></canvas>
+  </div>
+
+  <h2>Jobs Dashboard</h2>
+  <div class="card">
+    <button id="refreshJobs">Refresh Jobs</button>
+    <ul id="jobsList"></ul>
+  </div>
+
+  <h2>Schedules</h2>
+  <div class="card">
+    <form id="scheduleForm">
+      <label>Interval (seconds)</label>
+      <input type="number" name="interval_seconds" value="3600">
+      <label>or Cron expression (e.g. */30 * * * *)</label>
+      <input type="text" name="cron_expr" placeholder="*/30 * * * *">
+      <button type="submit">Create Schedule (uses current Crawl form params)</button>
+    </form>
+    <button id="refreshSchedules">Refresh Schedules</button>
+    <ul id="schedulesList"></ul>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    function getFormData(form) {
+      const data = {};
+      new FormData(form).forEach((value, key) => {
+        if (value === "on") {
+          data[key] = true;
+        } else if (!isNaN(value) && value !== "") {
+          data[key] = Number(value);
+        } else if (key === "urls" && value.trim() !== "") {
+          data[key] = value.trim().split(/\\s+/);
+        } else if (key === "allowlist_patterns" || key === "denylist_patterns") {
+          data[key] = value.split("\\n").map(s => s.trim()).filter(Boolean);
+        } else if (key === "allowlist_by_domain" || key === "denylist_by_domain" || key === "domain_delay_overrides") {
+          try {
+            data[key] = value.trim() ? JSON.parse(value) : null;
+          } catch (e) {
+            data[key] = null;
+          }
+        } else {
+          data[key] = value;
+        }
+      });
+      return data;
+    }
+
+    async function postJSON(url, payload) {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      try {
+        const json = await res.json();
+        return json;
+      } catch (e) {
+        return { status: res.status, text: await res.text() };
+      }
+    }
+
+    async function getJSON(url) {
+      const res = await fetch(url);
+      return await res.json();
+    }
+
+    const resp = document.getElementById("resp");
+    const progressLog = document.getElementById("progressLog");
+    const jobIdEl = document.getElementById("jobId");
+    const patternValidation = document.getElementById("patternValidation");
+
+    // Chart.js setup
+    const ctx = document.getElementById("metricsChart").getContext("2d");
+    const metricsData = {
+      labels: [],
+      datasets: [
+        { label: "Completed", data: [], borderColor: "#0b5ed7", fill: false },
+        { label: "Errors", data: [], borderColor: "#c62828", fill: false },
+        { label: "OK", data: [], borderColor: "#1a7f37", fill: false },
+      ],
+    };
+    const metricsChart = new Chart(ctx, {
+      type: "line",
+      data: metricsData,
+      options: {
+        responsive: false,
+        animation: false,
+        scales: { x: { display: true }, y: { beginAtZero: true } },
+      },
+    });
+
+    const dctx = document.getElementById("domainChart").getContext("2d");
+    const domainChart = new Chart(dctx, {
+      type: "bar",
+      data: {
+        labels: [],
+        datasets: [
+          { label: "Total", data: [], backgroundColor: "#0b5ed7", yAxisID: "y" },
+          { label: "Avg Latency (ms)", data: [], type: "line", borderColor: "#ffa726", backgroundColor: "#ffa726", yAxisID: "y1" },
+          { label: "Error Rate (%)", data: [], type: "line", borderColor: "#ef5350", backgroundColor: "#ef5350", yAxisID: "y1" },
+        ],
+      },
+      options: {
+        responsive: false,
+        animation: false,
+        scales: {
+          x: { display: true },
+          y: { beginAtZero: true, position: "left", title: { display: true, text: "Total" } },
+          y1: { beginAtZero: true, position: "right", title: { display: true, text: "Latency / Error %" } },
+        },
+      },
+    });
+
+    function updateDomainChart(stats) {
+      if (!stats) return;
+      const labels = Object.keys(stats);
+      const totals = labels.map(dom => stats[dom].total || 0);
+      const avgms = labels.map(dom => Math.round(stats[dom].avg_ms || 0));
+      const errpct = labels.map(dom => {
+        const s = stats[dom];
+        const errs = (s.fetch_error || 0) + (s.extraction_failed || 0) + (s.error || 0);
+        const total = s.total || 1;
+        return Math.round((errs / total) * 100);
+      });
+      domainChart.data.labels = labels;
+      domainChart.data.datasets[0].data = totals;
+      domainChart.data.datasets[1].data = avgms;
+      domainChart.data.datasets[2].data = errpct;
+      domainChart.update();
+    }
+
+    // ---- Schedules UI ----
+    async function refreshSchedules() {
+      const outdir = document.querySelector('input[name="output_dir"]').value || "data";
+      const data = await getJSON("/schedules?output_dir=" + encodeURIComponent(outdir));
+      const list = document.getElementById("schedulesList");
+      list.innerHTML = "";
+      (data.schedules || []).forEach(s => {
+        const li = document.createElement("li");
+        li.innerHTML = "<strong>" + s.schedule_id + "</strong> — every " + s.interval_seconds + "s — created " + (s.created_at ? new Date(s.created_at*1000).toLocaleString() : "") +
+          " — output_dir: " + (s.params && s.params.output_dir ? s.params.output_dir : (s.output_dir || "data"));
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = async () => {
+          await fetch("/schedules/" + s.schedule_id, { method: "DELETE" });
+          refreshSchedules();
+        };
+        li.appendChild(cancelBtn);
+        list.appendChild(li);
+      });
+    }
+
+    document.getElementById("refreshSchedules").addEventListener("click", refreshSchedules);
+    document.getElementById("scheduleForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const interval = Number(fd.get("interval_seconds"));
+      const cron = (fd.get("cron_expr") || "").trim();
+      if (cron) {
+        const v = await getJSON("/validate-cron?expr=" + encodeURIComponent(cron));
+        if (!v.valid) {
+          alert("Invalid cron expression: " + (v.error || ""));
+          return;
+        }
+      }
+      const crawlParams = getFormData(document.getElementById("crawlForm"));
+      const payload = { interval_seconds: interval || null, cron_expr: cron || null, params: crawlParams };
+      const res = await postJSON("/schedules", payload);
+      resp.textContent = JSON.stringify(res, null, 2);
+      refreshSchedules();
+    });
+    // Initial schedules load
+    refreshSchedules();
+
+    // Jobs dashboard
+    async function refreshJobs() {
+      const outdir = document.querySelector('input[name="output_dir"]').value || "data";
+      const jobs = await getJSON("/jobs?output_dir=" + encodeURIComponent(outdir));
+      const list = document.getElementById("jobsList");
+      list.innerHTML = "";
+      (jobs.jobs || []).forEach(job => {
+        const li = document.createElement("li");
+        const id = job.job_id;
+        const status = job.done ? "Done" : (job.active ? "Running" : "Pending");
+        li.innerHTML = "<strong>" + id + "</strong> — " + status + " — " + (job.meta && job.meta.created_at ? new Date(job.meta.created_at*1000).toLocaleString() : "") +
+          (job.meta && job.meta.report_pages ? (" — Reports: " + job.meta.report_pages.map(p => "<a href='/reports?output_dir=" + encodeURIComponent(job.meta.output_dir || outdir) + "&file=" + encodeURIComponent(p.split('/').pop()) + "' target='_blank'>" + p.split('/').pop() + "</a>").join(", ")) : "");
+        const actions = document.createElement("div");
+        actions.style.marginTop = "6px";
+        const streamBtn = document.createElement("button");
+        streamBtn.textContent = "Stream";
+        streamBtn.onclick = async () => {
+          jobIdEl.textContent = "Job ID: " + id;
+          progressLog.textContent = "";
+          const es = new EventSource("/jobs/" + id + "/stream");
+          es.onmessage = (ev) => {
+            try {
+              const obj = JSON.parse(ev.data);
+              progressLog.textContent += JSON.stringify(obj, null, 2) + "\\n";
+              updateChart(obj);
+              updateDomainChart(obj.stats);
+            } catch (e) {
+              progressLog.textContent += ev.data + "\\n";
+            }
+          };
+          es.onerror = () => es.close();
+        };
+        actions.appendChild(streamBtn);
+        const reportBtn = document.createElement("button");
+        reportBtn.textContent = "View Report";
+        reportBtn.onclick = async () => {
+          const st = await getJSON("/jobs/" + id + "/status");
+          const pages = (st.meta && st.meta.report_pages) || [];
+          if (pages.length) {
+            window.open("/reports?output_dir=" + encodeURIComponent(st.meta.output_dir || outdir) + "&file=" + encodeURIComponent(pages[0].split('/').pop()), "_blank");
+          } else {
+            alert("No report available yet.");
+          }
+        };
+        actions.appendChild(reportBtn);
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = async () => {
+          await fetch("/jobs/" + id, { method: "DELETE" });
+          refreshJobs();
+        };
+        actions.appendChild(cancelBtn);
+        li.appendChild(actions);
+        list.appendChild(li);
+      });
+    }
+    document.getElementById("refreshJobs").addEventListener("click", refreshJobs);
+    // Initial load
+    refreshJobs();
+
+    document.getElementById("crawlForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/crawl", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    // Validate allow/deny patterns on input change
+    function validatePatterns() {
+      const form = document.getElementById("crawlForm");
+      const data = getFormData(form);
+      const warnings = [];
+      function validateList(list, label) {
+        if (!list) return;
+        list.forEach(p => {
+          try { new RegExp(p); } catch (e) { warnings.push(label + " invalid regex: " + p); }
+        });
+      }
+      validateList(data.allowlist_patterns, "Allowlist");
+      validateList(data.denylist_patterns, "Denylist");
+      if (data.allowlist_by_domain) {
+        Object.entries(data.allowlist_by_domain).forEach(([dom, lst]) => validateList(lst, "Allowlist[" + dom + "]"));
+      }
+      if (data.denylist_by_domain) {
+        Object.entries(data.denylist_by_domain).forEach(([dom, lst]) => validateList(lst, "Denylist[" + dom + "]"));
+      }
+      patternValidation.textContent = warnings.length ? ("Warnings:\\n" + warnings.join("\\n")) : "Patterns look ok.";
+    }
+    document.querySelectorAll('textarea[name="allowlist_patterns"], textarea[name="denylist_patterns"], textarea[name="allowlist_by_domain"], textarea[name="denylist_by_domain"]').forEach(el => {
+      el.addEventListener("input", validatePatterns);
+    });
+    validatePatterns();
+
+    document.getElementById("streamBtn").addEventListener("click", async (e) => {
+      const form = document.getElementById("crawlForm");
+      const data = getFormData(form);
+      // Create job
+      const job = await postJSON("/jobs", data);
+      jobIdEl.textContent = "Job ID: " + job.job_id;
+      progressLog.textContent = "";
+      // Connect to job stream
+      const es = new EventSource("/jobs/" + job.job_id + "/stream");
+      es.onmessage = (ev) => {
+        try {
+          const obj = JSON.parse(ev.data);
+          progressLog.textContent += JSON.stringify(obj, null, 2) + "\\n";
+          updateChart(obj);
+          updateDomainChart(obj.stats);
+        } catch (e) {
+          progressLog.textContent += ev.data + "\\n";
+        }
+      };
+      es.onerror = (err) => {
+        progressLog.textContent += "Stream error\\n";
+        es.close();
+      };
+    });
+
+    document.getElementById("indexForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/build-index", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("askForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/ask", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+
+    document.getElementById("reportForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = getFormData(e.target);
+      const json = await postJSON("/report", data);
+      resp.textContent = JSON.stringify(json, null, 2);
+    });
+  </script>
+</body>
+</html>
