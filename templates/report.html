@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <title>Crawl Report — Page {{ page }}/{{ num_pages }}</title>
+  <style>
+    :root { --bg: #ffffff; --fg: #222; --muted: #666; --ok: #1a7f37; --error: #c62828; --card: #f9f9f9; --border: #ddd; --link: #0b5ed7; }
+    [data-theme="dark"] { --bg: #121212; --fg: #eee; --muted: #bbb; --ok: #37b36e; --error: #ff6b6b; --card: #1d1d1d; --border: #333; --link: #66b2ff; }
+    body { background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .muted { color: var(--muted); }
+    .grid { display: grid; grid-template-columns: 1fr 170px 1fr; gap: 10px; align-items: start; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+    .ok { color: var(--ok); }
+    .error { color: var(--error); }
+    pre { white-space: pre-wrap; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+    .stat { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--card); }
+    .pagination { margin: 1rem 0; }
+    .pagination a { margin-right: 8px; }
+    .header { display: flex; justify-content: space-between; align-items: baseline; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Crawl Report</h1>
+    <div class="muted">Page {{ page }} of {{ num_pages }}</div>
+  </div>
+  <p class="muted">Output dir: {{ output_dir }}</p>
+
+  <h2>Domain Stats</h2>
+  <div class="stats">
+    {% for dom, s in stats|dictsort(by='value', reverse=True) %}
+      <div class="stat">
+        <strong>{{ dom }}</strong><br>
+        total: {{ s.total }}, ok: {{ s.ok|default(0) }}, errors: {{ (s.fetch_error|default(0) + s.extraction_failed|default(0) + s.error|default(0)) }}, avg: {{ '%0.0f' % s.avg_ms }} ms
+      </div>
+    {% endfor %}
+  </div>
+
+  {% if qa %}
+    <h2>Q&A</h2>
+    <p><strong>Question:</strong> {{ qa.question }}</p>
+    {% if qa.summary %}
+      <h3>Synthesized Answer</h3>
+      <p>{{ qa.summary }}</p>
+    {% endif %}
+    <h3>Top Passages</h3>
+    <ol>
+      {% for hit in qa.hits %}
+        <li>
+          <div class="card">
+            <div class="muted">Source: {{ hit.source }}</div>
+            <pre>{{ hit.passage }}</pre>
+          </div>
+        </li>
+      {% endfor %}
+    </ol>
+  {% endif %}
+
+  <h2>Results</h2>
+  {% for r in results %}
+    {% set status_class = 'ok' if r.status == 'ok' else 'error' if 'error' in r.status else 'muted' %}
+    <div class="card">
+      <div class="grid">
+        <div>
+          <strong>{{ r.title or r.url }}</strong><br>
+          <span class="muted">{{ r.url }}</span>
+        </div>
+        <div class="{{ status_class }}">{{ r.status }} · {{ '%0.0f' % (r.duration_ms or 0) }} ms</div>
+        <div>
+          {% if r.text_path %}
+            <a href="file:///{{ r.text_path }}" target="_blank">{{ r.text_path }}</a>
+          {% else %}
+            <em>n/a</em>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+
+  <div class="pagination">
+    {% if num_pages > 1 %}
+      {% for i in range(1, num_pages+1) %}
+        <a href="{{ 'report_page_' ~ i ~ '.html' }}" {% if i == page %}class="muted"{% endif %}>Page {{ i }}</a>
+      {% endfor %}
+    {% endif %}
+  </div>
+</body>
+</html>

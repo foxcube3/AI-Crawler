@@ -320,6 +320,7 @@ class CrawlResult:
     status: str
     domain: str
     error: Optional[str] = None
+    duration_ms: Optional[float] = None
 
 
 def sanitize_filename(name: str) -> str:
@@ -368,18 +369,21 @@ def process_url(current_url: str, depth: int, output_dir: str, timeout: int, all
             rate_limiter.set_delay(domain, robots_delay)
     rate_limiter.wait(domain)
 
+    start = time.perf_counter()
     ua = ua_rotator.next()
     resp, err = fetch_with_retry(current_url, timeout=timeout, user_agent=ua, max_retries=max_retries, backoff_base=backoff_base, backoff_jitter=backoff_jitter)
     if resp is None:
-        return CrawlResult(url=current_url, title=None, text_path=None, status="fetch_error", domain=domain, error=err), []
+        elapsed = (time.perf_counter() - start) * 1000.0
+        return CrawlResult(url=current_url, title=None, text_path=None, status="fetch_error", domain=domain, error=err, duration_ms=elapsed), []
 
     text, title, html = detect_and_extract(resp, current_url)
+    elapsed = (time.perf_counter() - start) * 1000.0
     if not text:
-        result = CrawlResult(url=current_url, title=None, text_path=None, status="extraction_failed", domain=domain)
+        result = CrawlResult(url=current_url, title=None, text_path=None, status="extraction_failed", domain=domain, duration_ms=elapsed)
         nexts: List[Tuple[str, int]] = []
     else:
         text_path = save_text(text, current_url, output_dir, title)
-        result = CrawlResult(url=current_url, title=title, text_path=text_path, status="ok", domain=domain)
+        result = CrawlResult(url=current_url, title=title, text_path=text_path, status="ok", domain=domain, duration_ms=elapsed)
         nexts = []
 
     if html and depth < crawl_depth:
@@ -427,36 +431,108 @@ def load_crawl_state(state_path: str) -> Tuple[CrawlFrontier, List[CrawlResult],
     inflight = data.get("inflight_by_domain", {})
     return frontier, results, inflight
 
+def compute_domain_stats(results: List[CrawlResult]) -> Dict[str, Dict[str, float]]:
+    stats: Dict[str, Dict[str, float]] = {}
+    for r in results:
+        d = r.domain
+        if d not in stats:
+            stats[d] = {"total": 0, "ok": 0, "fetch_error": 0, "extraction_failed": 0, "error": 0, "avg_ms": 0.0, "sum_ms": 0.0}
+        stats[d]["total"] += 1
+        stats[d][r.status] = stats[d].get(r.status, 0) + 1
+        if r.duration_ms is not None:
+            stats[d]["sum_ms"] += r.duration_ms
+    for d in stats:
+        total = stats[d]["total"]
+        stats[d]["avg_ms"] = (stats[d]["sum_ms"] / total) if total else 0.0
+        del stats[d]["sum_ms"]
+    return stats
+
 def generate_html_report(output_dir: str, results: List[CrawlResult], qa: Optional[Dict] = None) -> str:
+    # Fallback non-templated
     html_parts = []
     html_parts.append("<!doctype html><html><head><meta charset='utf-8'><title>Crawl Report</title>")
     html_parts.append("<style>body{font-family:Arial, sans-serif; max-width: 1000px; margin: 2rem auto; padding:0 1rem;} .ok{color: #1a7f37;} .error{color:#c62828;} .grid{display:grid; grid-template-columns: 1fr 120px 1fr; gap: 8px; align-items:center;} .card{border:1px solid #ddd; padding:12px; border-radius:8px; margin-bottom:10px;} .muted{color:#666; font-size: 0.9em;} pre{white-space: pre-wrap;}</style></head><body>")
     html_parts.append("<h1>Crawl Report</h1>")
     html_parts.append(f"<p class='muted'>Output dir: {output_dir}</p>")
+    # Stats
+    html_parts.append("<h2>Domain Stats</h2>")
+    stats = compute_domain_stats(results)
+    html_parts.append("<ul>")
+    for dom, s in sorted(stats.items(), key=lambda kv: (-kv[1]["total"], kv[0])):
+        html_parts.append(f"<li><strong>{dom}</strong> — total: {s['total']}, ok: {s.get('ok',0)}, errors: {s.get('fetch_error',0)+s.get('extraction_failed',0)+s.get('error',0)}, avg: {s['avg_ms']:.0f} ms</li>")
+    html_parts.append("</ul>")
+    # Results
     html_parts.append("<h2>Results</h2>")
     for r in results:
         status_class = "ok" if r.status == "ok" else "error" if "error" in r.status else "muted"
         title = r.title or r.url
-        text_link = f\"<a href='file:///{r.text_path}' target='_blank'>{r.text_path}</a>\" if r.text_path else "<em>n/a</em>"
-        html_parts.append(f\"<div class='card'><div class='grid'><div><strong>{title}</strong><br><span class='muted'>{r.url}</span></div><div class='{status_class}'>{r.status}</div><div>{text_link}</div></div></div>\")
+        text_link = f"<a href='file:///{r.text_path}' target='_blank'>{r.text_path}</a>" if r.text_path else "<em>n/a</em>"
+        dur = f"{r.duration_ms:.0f} ms" if r.duration_ms is not None else "n/a"
+        html_parts.append(f"<div class='card'><div class='grid'><div><strong>{title}</strong><br><span class='muted'>{r.url}</span></div><div class='{status_class}'>{r.status} · {dur}</div><div>{text_link}</div></div></div>")
     if qa:
         html_parts.append("<h2>Q&A</h2>")
-        html_parts.append(f\"<p><strong>Question:</strong> {qa.get('question','')}</p>\")
+        html_parts.append(f"<p><strong>Question:</strong> {qa.get('question','')}</p>")
         if qa.get("summary"):
             html_parts.append("<h3>Synthesized Answer</h3>")
-            html_parts.append(f\"<p>{qa['summary']}</p>\")
+            html_parts.append(f"<p>{qa['summary']}</p>")
         html_parts.append("<h3>Top Passages</h3>")
         html_parts.append("<ol>")
         for hit in qa.get("hits", []):
             src = hit.get("source", "")
             passage = hit.get("passage", "").replace("<", "&lt;").replace(">", "&gt;")
-            html_parts.append(f\"<li><div class='card'><div class='muted'>Source: {src}</div><pre>{passage}</pre></div></li>\")
+            html_parts.append(f"<li><div class='card'><div class='muted'>Source: {src}</div><pre>{passage}</pre></div></li>")
         html_parts.append("</ol>")
     html_parts.append("</body></html>")
     report_path = os.path.join(output_dir, "report.html")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(html_parts))
     return report_path
+
+def generate_html_report_jinja(output_dir: str, results: List[CrawlResult], qa: Optional[Dict] = None, page_size: int = 50, theme: str = "light") -> List[str]:
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+    except Exception:
+        # Fallback to non-templated
+        return [generate_html_report(output_dir, results, qa)]
+    env = Environment(
+        loader=FileSystemLoader(searchpath=os.path.join(os.getcwd(), "templates")),
+        autoescape=select_autoescape(["html"])
+    )
+    try:
+        tmpl = env.get_template("report.html")
+    except Exception:
+        return [generate_html_report(output_dir, results, qa)]
+    stats = compute_domain_stats(results)
+    pages = []
+    total = len(results)
+    num_pages = max(1, (total + page_size - 1) // page_size)
+    for i in range(num_pages):
+        start = i * page_size
+        end = min(total, (i + 1) * page_size)
+        page_results = results[start:end]
+        out = tmpl.render(
+            output_dir=output_dir,
+            theme=theme,
+            stats=stats,
+            results=page_results,
+            qa=qa if i == 0 else None,
+            page=i + 1,
+            num_pages=num_pages,
+        )
+        fname = "report_page_1.html" if num_pages == 1 else f"report_page_{i+1}.html"
+        path = os.path.join(output_dir, fname)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(out)
+        pages.append(path)
+    # Write a landing page that links to page 1
+    index_path = os.path.join(output_dir, "report.html")
+    with open(index_path, "w", encoding="utf-8") as f:
+        if num_pages == 1:
+            f.write(out)  # same content
+        else:
+            links = "\n".join([f"<li><a href='{os.path.basename(p)}'>Page {idx+1}</a></li>" for idx, p in enumerate(pages)])
+            f.write(f"<!doctype html><html><head><meta charset='utf-8'><title>Crawl Report</title></head><body><h1>Crawl Report</h1><ul>{links}</ul></body></html>")
+    return [index_path] + pages
 
 def crawl(
     query: Optional[str],
