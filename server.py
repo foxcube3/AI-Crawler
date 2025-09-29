@@ -82,6 +82,7 @@ def api_crawl(req: CrawlRequest):
         state_path=req.state_path,
         synthesize_question=req.synthesize_question,
         top_k_for_summary=req.top_k_for_summary,
+        progress_callback=None,
     )
     return res
 
@@ -135,6 +136,80 @@ def ui():
     <body><h1>AI Crawler Assistant</h1>
     <p>Frontend template not found. Use API endpoints: /crawl, /build-index, /ask, /report</p>
     </body></html>"""
+
+# Serve generated report pages directly
+@app.get("/reports", response_class=HTMLResponse)
+def get_report(output_dir: str = "data", file: str = "report.html"):
+    path = os.path.join(output_dir, file)
+    if not os.path.exists(path):
+        return HTMLResponse(content=f"<h1>404</h1><p>Report file not found: {path}</p>", status_code=404)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read(), status_code=200)
+    except Exception as e:
+        return HTMLResponse(content=f"<h1>Error</h1><p>{e}</p>", status_code=500)
+
+# SSE streaming of crawl progress
+try:
+    from sse_starlette.sse import EventSourceResponse
+except Exception:
+    EventSourceResponse = None
+
+@app.post("/stream-crawl")
+async def stream_crawl(req: CrawlRequest):
+    if EventSourceResponse is None:
+        return {"error": "SSE not available (install sse-starlette)."}
+
+    from queue import Queue
+    import threading
+
+    q: Queue = Queue()
+    done = {"value": False}
+
+    def progress(event: Dict):
+        q.put(event)
+
+    def run_crawl():
+        try:
+            crawl(
+                query=req.query,
+                urls=req.urls,
+                output_dir=req.output_dir,
+                max_results=req.max_results,
+                crawl_depth=req.crawl_depth,
+                max_pages_total=req.max_pages_total,
+                timeout=req.timeout,
+                allow_external=req.allow_external,
+                concurrency=req.concurrency,
+                per_domain_delay=req.per_domain_delay,
+                user_agents=None,
+                per_domain_concurrency=req.per_domain_concurrency,
+                max_retries=req.max_retries,
+                backoff_base=req.backoff_base,
+                backoff_jitter=req.backoff_jitter,
+                save_state=req.save_state,
+                resume=req.resume,
+                state_path=req.state_path,
+                synthesize_question=None,
+                top_k_for_summary=req.top_k_for_summary,
+                progress_callback=progress,
+            )
+        finally:
+            done["value"] = True
+            q.put({"event": "complete"})
+
+    threading.Thread(target=run_crawl, daemon=True).start()
+
+    async def event_generator():
+        while not done["value"] or not q.empty():
+            try:
+                ev = q.get(timeout=0.5)
+                yield {"event": "progress", "data": json.dumps(ev)}
+            except Exception:
+                await asyncio.sleep(0.1)
+
+    import asyncio
+    return EventSourceResponse(event_generator())
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))

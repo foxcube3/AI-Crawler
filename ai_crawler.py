@@ -555,6 +555,7 @@ def crawl(
     state_path: Optional[str] = None,
     synthesize_question: Optional[str] = None,
     top_k_for_summary: int = 5,
+    progress_callback: Optional[callable] = None,
 ) -> Dict[str, List[Dict]]:
     ensure_dir(output_dir)
     discovered: List[str] = []
@@ -768,6 +769,26 @@ def summarize_passages(passages: List[str], max_sentences: int = 5) -> str:
     top.sort(key=lambda s: order.get(s, 0))
     return " ".join(top)
 
+def summarize_passages_llm(passages: List[str], max_tokens: int = 512) -> Optional[str]:
+    # Optional: use a small HF summarization model if available
+    try:
+        from transformers import pipeline
+        text = "\n\n".join(passages)
+        if not text.strip():
+            return None
+        summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+        # Split long text to fit model input constraints
+        max_chunk = 2000
+        chunks = [text[i:i+max_chunk] for i in range(0, len(text), max_chunk)]
+        outputs = []
+        for ch in chunks:
+            out = summarizer(ch, max_length=min(200, max_tokens), min_length=32, do_sample=False)
+            if isinstance(out, list) and out:
+                outputs.append(out[0].get("summary_text", ""))
+        return "\n\n".join([o for o in outputs if o]).strip() or None
+    except Exception:
+        return None
+
 def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", synthesize: bool = True) -> Dict:
     if np is None or faiss is None or SentenceTransformer is None:
         raise RuntimeError("Vector store dependencies not available. Please install requirements.")
@@ -800,8 +821,10 @@ def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str
         })
 
     extractive_answer = hits[0]["passage"] if hits else ""
-    summary = summarize_passages([h["passage"] for h in hits], max_sentences=5) if (synthesize and hits) else ""
-    return {"question": question, "answer": extractive_answer, "summary": summary, "hits": hits}
+    summary_extractive = summarize_passages([h["passage"] for h in hits], max_sentences=5) if (synthesize and hits) else ""
+    summary_llm = summarize_passages_llm([h["passage"] for h in hits]) if synthesize else None
+    summary = summary_llm or summary_extractive
+    return {"question": question, "answer": extractive_answer, "summary": summary or "", "hits": hits}
 
 
 def parse_args() -> argparse.Namespace:
