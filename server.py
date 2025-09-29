@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import uvicorn
 import os
 import json
+import time
 from typing import Optional, List, Dict
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
@@ -255,11 +256,30 @@ def create_job(req: CrawlRequest):
             )
         finally:
             done["value"] = True
-            # Update metadata with completion time
+            # Update metadata with completion time and generate report
             try:
                 with open(meta_path, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                 meta["completed_at"] = time.time()
+                # Attempt to load results from index.json and generate report pages
+                index_path = os.path.join(outdir, "index.json")
+                results: List[CrawlResult] = []
+                if os.path.exists(index_path):
+                    try:
+                        with open(index_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if isinstance(data, list):
+                            for r in data:
+                                results.append(CrawlResult(**r))
+                        else:
+                            for r in data.get("results", []):
+                                results.append(CrawlResult(**r))
+                        # Create paginated themed report (no QA by default)
+                        pages = generate_html_report_jinja(outdir, results, qa=None, page_size=50, theme="light")
+                        meta["report_pages"] = pages
+                        meta["index_path"] = index_path
+                    except Exception:
+                        meta["report_pages"] = []
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, ensure_ascii=False, indent=2)
             except Exception:

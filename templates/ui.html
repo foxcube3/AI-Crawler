@@ -138,6 +138,16 @@ logout
   <div class="card">
     <canvas id="metricsChart" width="800" height="300"></canvas>
   </div>
+  <div class="card">
+    <strong>Per-domain totals</strong>
+    <canvas id="domainChart" width="800" height="300"></canvas>
+  </div>
+
+  <h2>Jobs Dashboard</h2>
+  <div class="card">
+    <button id="refreshJobs">Refresh Jobs</button>
+    <ul id="jobsList"></ul>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script>
@@ -149,9 +159,9 @@ logout
         } else if (!isNaN(value) && value !== "") {
           data[key] = Number(value);
         } else if (key === "urls" && value.trim() !== "") {
-          data[key] = value.trim().split(/\s+/);
+          data[key] = value.trim().split(/\\s+/);
         } else if (key === "allowlist_patterns" || key === "denylist_patterns") {
-          data[key] = value.split("\n").map(s => s.trim()).filter(Boolean);
+          data[key] = value.split("\\n").map(s => s.trim()).filter(Boolean);
         } else if (key === "allowlist_by_domain" || key === "denylist_by_domain" || key === "domain_delay_overrides") {
           try {
             data[key] = value.trim() ? JSON.parse(value) : null;
@@ -173,6 +183,11 @@ logout
       } catch (e) {
         return { status: res.status, text: await res.text() };
       }
+    }
+
+    async function getJSON(url) {
+      const res = await fetch(url);
+      return await res.json();
     }
 
     const resp = document.getElementById("resp");
@@ -200,6 +215,13 @@ logout
       },
     });
 
+    const dctx = document.getElementById("domainChart").getContext("2d");
+    const domainChart = new Chart(dctx, {
+      type: "bar",
+      data: { labels: [], datasets: [{ label: "Total", data: [], backgroundColor: "#0b5ed7" }] },
+      options: { responsive: false, animation: false, scales: { x: { display: true }, y: { beginAtZero: true } } },
+    });
+
     function updateChart(ev) {
       if (!ev || !ev.stats) return;
       const stats = ev.stats;
@@ -214,6 +236,75 @@ logout
       metricsData.datasets[2].data.push(total_ok);
       metricsChart.update();
     }
+
+    function updateDomainChart(stats) {
+      if (!stats) return;
+      const labels = Object.keys(stats);
+      const data = labels.map(dom => stats[dom].total || 0);
+      domainChart.data.labels = labels;
+      domainChart.data.datasets[0].data = data;
+      domainChart.update();
+    }
+
+    // Jobs dashboard
+    async function refreshJobs() {
+      const outdir = document.querySelector('input[name="output_dir"]').value || "data";
+      const jobs = await getJSON("/jobs?output_dir=" + encodeURIComponent(outdir));
+      const list = document.getElementById("jobsList");
+      list.innerHTML = "";
+      (jobs.jobs || []).forEach(job => {
+        const li = document.createElement("li");
+        const id = job.job_id;
+        const status = job.done ? "Done" : (job.active ? "Running" : "Pending");
+        li.innerHTML = "<strong>" + id + "</strong> — " + status + " — " + (job.meta && job.meta.created_at ? new Date(job.meta.created_at*1000).toLocaleString() : "") +
+          (job.meta && job.meta.report_pages ? (" — Reports: " + job.meta.report_pages.map(p => "<a href='/reports?output_dir=" + encodeURIComponent(job.meta.output_dir || outdir) + "&file=" + encodeURIComponent(p.split('/').pop()) + "' target='_blank'>" + p.split('/').pop() + "</a>").join(", ")) : "");
+        const actions = document.createElement("div");
+        actions.style.marginTop = "6px";
+        const streamBtn = document.createElement("button");
+        streamBtn.textContent = "Stream";
+        streamBtn.onclick = async () => {
+          jobIdEl.textContent = "Job ID: " + id;
+          progressLog.textContent = "";
+          const es = new EventSource("/jobs/" + id + "/stream");
+          es.onmessage = (ev) => {
+            try {
+              const obj = JSON.parse(ev.data);
+              progressLog.textContent += JSON.stringify(obj, null, 2) + "\\n";
+              updateChart(obj);
+              updateDomainChart(obj.stats);
+            } catch (e) {
+              progressLog.textContent += ev.data + "\\n";
+            }
+          };
+          es.onerror = () => es.close();
+        };
+        actions.appendChild(streamBtn);
+        const reportBtn = document.createElement("button");
+        reportBtn.textContent = "View Report";
+        reportBtn.onclick = async () => {
+          const st = await getJSON("/jobs/" + id + "/status");
+          const pages = (st.meta && st.meta.report_pages) || [];
+          if (pages.length) {
+            window.open("/reports?output_dir=" + encodeURIComponent(st.meta.output_dir || outdir) + "&file=" + encodeURIComponent(pages[0].split('/').pop()), "_blank");
+          } else {
+            alert("No report available yet.");
+          }
+        };
+        actions.appendChild(reportBtn);
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = async () => {
+          await fetch("/jobs/" + id, { method: "DELETE" });
+          refreshJobs();
+        };
+        actions.appendChild(cancelBtn);
+        li.appendChild(actions);
+        list.appendChild(li);
+      });
+    }
+    document.getElementById("refreshJobs").addEventListener("click", refreshJobs);
+    // Initial load
+    refreshJobs();
 
     document.getElementById("crawlForm").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -261,6 +352,8 @@ logout
         try {
           const obj = JSON.parse(ev.data);
           progressLog.textContent += JSON.stringify(obj, null, 2) + "\\n";
+          updateChart(obj);
+          updateDomainChart(obj.stats);
         } catch (e) {
           progressLog.textContent += ev.data + "\\n";
         }
