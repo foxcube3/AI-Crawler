@@ -5,6 +5,7 @@ import uvicorn
 import os
 import json
 import time
+import threading
 from typing import Optional, List, Dict
 
 from ai_crawler import crawl, build_vector_index, ask_question, generate_html_report_jinja, CrawlResult, compute_domain_stats
@@ -388,14 +389,35 @@ async def stream_crawl(req: CrawlRequest):
 @app.get("/jobs/{job_id}/status")
 def job_status(job_id: str):
     job = JOBS.get(job_id)
-    if not job:
-        # Try to load metadata only
-        # Search in default data dir
-        return {"error": f"job not found: {job_id}"}
-    done = job["done"]["value"]
-    # Read last event if exists
+    done = False
+    meta = {}
     last_event = None
-    events_path = job.get("events_path")
+    events_path = None
+    if job:
+        done = job["done"]["value"]
+        events_path = job.get("events_path")
+        meta_path = job.get("meta_path")
+        if meta_path and os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+    else:
+        # Try loading persisted meta and events when job is not active
+        outdir = "data"
+        jobs_dir = os.path.join(outdir, "jobs")
+        meta_path = os.path.join(jobs_dir, f"{job_id}.meta.json")
+        events_path = os.path.join(jobs_dir, f"{job_id}.jsonl")
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+        done = bool(meta.get("completed_at"))
+
+    # Read last event if exists
     if events_path and os.path.exists(events_path):
         try:
             with open(events_path, "rb") as f:
@@ -416,14 +438,6 @@ def job_status(job_id: str):
                         break
         except Exception:
             pass
-    meta = {}
-    meta_path = job.get("meta_path")
-    if meta_path and os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        except Exception:
-            meta = {}
     return {"done": done, "last_event": last_event, "meta": meta}
 
 @app.delete("/jobs/{job_id}")
@@ -458,6 +472,112 @@ def list_jobs(output_dir: str = "data"):
             except Exception:
                 continue
     return {"jobs": jobs}
+
+@app.get("/jobs/{job_id}")
+def job_detail(job_id: str, output_dir: str = "data"):
+    # Return meta, aggregated stats (from events), and report links
+    # Try active job store first
+    job = JOBS.get(job_id)
+    meta = {}
+    events_path = None
+    if job:
+        meta_path = job.get("meta_path")
+        if meta_path and os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+        events_path = job.get("events_path")
+    else:
+        # Look up persisted meta
+        jobs_dir = os.path.join(output_dir, "jobs")
+        mpath = os.path.join(jobs_dir, f"{job_id}.meta.json")
+        if os.path.exists(mpath):
+            try:
+                with open(mpath, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+        events_path = os.path.join(jobs_dir, f"{job_id}.jsonl")
+
+    # Aggregate events into CrawlResult list and compute stats
+    results: List[CrawlResult] = []
+    events_count = 0
+    if events_path and os.path.exists(events_path):
+        try:
+            with open(events_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    events_count += 1
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    res = ev.get("result")
+                    if isinstance(res, dict) and res.get("url"):
+                        try:
+                            results.append(CrawlResult(**res))
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+    stats = compute_domain_stats(results) if results else {}
+    return {"job_id": job_id, "meta": meta, "events_count": events_count, "stats": stats}
+
+# ---------- Simple in-memory scheduler ----------
+
+SCHEDULES: Dict[str, Dict] = {}  # schedule_id -> {"interval": int, "params": dict, "cancel": dict, "thread": Thread, "output_dir": str}
+
+class ScheduleRequest(BaseModel):
+    interval_seconds: int
+    params: CrawlRequest
+
+def _schedule_loop(schedule_id: str):
+    sched = SCHEDULES.get(schedule_id)
+    if not sched:
+        return
+    interval = max(1, int(sched["interval"]))
+    cancel = sched["cancel"]
+    params: CrawlRequest = sched["params"]
+    while not cancel["value"]:
+        # Launch a job using the same params
+        try:
+            create_job(params)
+        except Exception:
+            pass
+        # Sleep until next run or until cancelled
+        for _ in range(interval):
+            if cancel["value"]:
+                break
+            time.sleep(1)
+
+@app.post("/schedules")
+def create_schedule(req: ScheduleRequest):
+    schedule_id = str(uuid4())
+    cancel = {"value": False}
+    SCHEDULES[schedule_id] = {"interval": req.interval_seconds, "params": req.params, "cancel": cancel}
+    t = threading.Thread(target=_schedule_loop, args=(schedule_id,), daemon=True)
+    SCHEDULES[schedule_id]["thread"] = t
+    t.start()
+    return {"schedule_id": schedule_id}
+
+@app.get("/schedules")
+def list_schedules():
+    items = []
+    for sid, s in SCHEDULES.items():
+        items.append({"schedule_id": sid, "interval_seconds": s["interval"], "params": s["params"].dict()})
+    return {"schedules": items}
+
+@app.delete("/schedules/{schedule_id}")
+def delete_schedule(schedule_id: str):
+    s = SCHEDULES.get(schedule_id)
+    if not s:
+        return {"error": f"schedule not found: {schedule_id}"}
+    s["cancel"]["value"] = True
+    return {"schedule_id": schedule_id, "cancelled": True}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
