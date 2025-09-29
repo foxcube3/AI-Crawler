@@ -391,6 +391,73 @@ def process_url(current_url: str, depth: int, output_dir: str, timeout: int, all
     return result, nexts
 
 
+def serialize_frontier(frontier: CrawlFrontier) -> Dict:
+    return {
+        "heap": frontier.heap[:],  # list of (depth, domain_priority, counter, url)
+        "seen": list(frontier.seen),
+        "counter": frontier.counter,
+        "seed_domains": list(frontier.seed_domains),
+    }
+
+def deserialize_frontier(data: Dict) -> CrawlFrontier:
+    cf = CrawlFrontier(seed_domains=data.get("seed_domains", []))
+    cf.heap = data.get("heap", [])
+    cf.seen = set(data.get("seen", []))
+    cf.counter = int(data.get("counter", 0))
+    return cf
+
+def save_crawl_state(output_dir: str, frontier: CrawlFrontier, results: List[CrawlResult], inflight_by_domain: Dict[str, int], state_path: Optional[str] = None) -> str:
+    ensure_dir(output_dir)
+    path = state_path or os.path.join(output_dir, "crawl_state.json")
+    state = {
+        "frontier": serialize_frontier(frontier),
+        "results": [asdict(r) for r in results],
+        "inflight_by_domain": inflight_by_domain,
+        "saved_at": time.time(),
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    return path
+
+def load_crawl_state(state_path: str) -> Tuple[CrawlFrontier, List[CrawlResult], Dict[str, int]]:
+    with open(state_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    frontier = deserialize_frontier(data["frontier"])
+    results = [CrawlResult(**r) for r in data.get("results", [])]
+    inflight = data.get("inflight_by_domain", {})
+    return frontier, results, inflight
+
+def generate_html_report(output_dir: str, results: List[CrawlResult], qa: Optional[Dict] = None) -> str:
+    html_parts = []
+    html_parts.append("<!doctype html><html><head><meta charset='utf-8'><title>Crawl Report</title>")
+    html_parts.append("<style>body{font-family:Arial, sans-serif; max-width: 1000px; margin: 2rem auto; padding:0 1rem;} .ok{color: #1a7f37;} .error{color:#c62828;} .grid{display:grid; grid-template-columns: 1fr 120px 1fr; gap: 8px; align-items:center;} .card{border:1px solid #ddd; padding:12px; border-radius:8px; margin-bottom:10px;} .muted{color:#666; font-size: 0.9em;} pre{white-space: pre-wrap;}</style></head><body>")
+    html_parts.append("<h1>Crawl Report</h1>")
+    html_parts.append(f"<p class='muted'>Output dir: {output_dir}</p>")
+    html_parts.append("<h2>Results</h2>")
+    for r in results:
+        status_class = "ok" if r.status == "ok" else "error" if "error" in r.status else "muted"
+        title = r.title or r.url
+        text_link = f\"<a href='file:///{r.text_path}' target='_blank'>{r.text_path}</a>\" if r.text_path else "<em>n/a</em>"
+        html_parts.append(f\"<div class='card'><div class='grid'><div><strong>{title}</strong><br><span class='muted'>{r.url}</span></div><div class='{status_class}'>{r.status}</div><div>{text_link}</div></div></div>\")
+    if qa:
+        html_parts.append("<h2>Q&A</h2>")
+        html_parts.append(f\"<p><strong>Question:</strong> {qa.get('question','')}</p>\")
+        if qa.get("summary"):
+            html_parts.append("<h3>Synthesized Answer</h3>")
+            html_parts.append(f\"<p>{qa['summary']}</p>\")
+        html_parts.append("<h3>Top Passages</h3>")
+        html_parts.append("<ol>")
+        for hit in qa.get("hits", []):
+            src = hit.get("source", "")
+            passage = hit.get("passage", "").replace("<", "&lt;").replace(">", "&gt;")
+            html_parts.append(f\"<li><div class='card'><div class='muted'>Source: {src}</div><pre>{passage}</pre></div></li>\")
+        html_parts.append("</ol>")
+    html_parts.append("</body></html>")
+    report_path = os.path.join(output_dir, "report.html")
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(html_parts))
+    return report_path
+
 def crawl(
     query: Optional[str],
     urls: Optional[List[str]],
@@ -407,32 +474,48 @@ def crawl(
     max_retries: int = 2,
     backoff_base: float = 0.5,
     backoff_jitter: float = 0.2,
+    save_state: bool = False,
+    resume: bool = False,
+    state_path: Optional[str] = None,
+    synthesize_question: Optional[str] = None,
+    top_k_for_summary: int = 5,
 ) -> Dict[str, List[Dict]]:
     ensure_dir(output_dir)
     discovered: List[str] = []
-    if query:
-        discovered = discover_urls_by_query(query, max_results=max_results)
-    if urls:
-        discovered.extend(urls)
+    if resume and (state_path or os.path.exists(os.path.join(output_dir, "crawl_state.json"))):
+        spath = state_path or os.path.join(output_dir, "crawl_state.json")
+        try:
+            frontier, results_loaded, _ = load_crawl_state(spath)
+            results: List[CrawlResult] = results_loaded
+        except Exception:
+            frontier = None
+            results = []
+    else:
+        frontier = None
+        results = []
 
-    # Normalize and deduplicate seeds
-    seeds: List[str] = []
-    seed_domains: List[str] = []
-    seen = set()
-    for u in discovered:
-        nu = normalize_url(u)
-        if not nu:
-            continue
-        if nu not in seen:
-            seeds.append(nu)
-            seen.add(nu)
-            seed_domains.append(urlparse(nu).netloc)
+    if frontier is None:
+        if query:
+            discovered = discover_urls_by_query(query, max_results=max_results)
+        if urls:
+            discovered.extend(urls)
 
-    results: List[CrawlResult] = []
-    frontier = CrawlFrontier(seed_domains=seed_domains)
+        # Normalize and deduplicate seeds
+        seeds: List[str] = []
+        seed_domains: List[str] = []
+        seen = set()
+        for u in discovered:
+            nu = normalize_url(u)
+            if not nu:
+                continue
+            if nu not in seen:
+                seeds.append(nu)
+                seen.add(nu)
+                seed_domains.append(urlparse(nu).netloc)
 
-    for u in seeds:
-        frontier.push(u, depth=0)
+        frontier = CrawlFrontier(seed_domains=seed_domains)
+        for u in seeds:
+            frontier.push(u, depth=0)
 
     ua_rotator = UserAgentRotator(user_agents or DEFAULT_USER_AGENTS)
     rate_limiter = PerDomainRateLimiter(default_delay=per_domain_delay)
@@ -449,7 +532,6 @@ def crawl(
                 current_url, depth = popped
                 domain = urlparse(current_url).netloc
                 if inflight_by_domain.get(domain, 0) >= per_domain_concurrency:
-                    # If domain saturated, push back with slight priority bump (depth unchanged)
                     frontier.push(current_url, depth)
                     break
                 inflight_by_domain[domain] = inflight_by_domain.get(domain, 0) + 1
@@ -459,7 +541,6 @@ def crawl(
             if futures:
                 for fut in as_completed(list(futures.keys())):
                     current_url, depth, domain = futures.pop(fut)
-                    # decrement domain inflight
                     inflight_by_domain[domain] = max(0, inflight_by_domain.get(domain, 1) - 1)
                     try:
                         result, nexts = fut.result()
@@ -468,15 +549,28 @@ def crawl(
                             frontier.push(nl, nd)
                     except Exception as e:
                         results.append(CrawlResult(url=current_url, title=None, text_path=None, status="error", domain=domain, error=f"{type(e).__name__}: {e}"))
-                    # break to allow scheduling loop to run
                     break
 
+            # Periodically save state
+            if save_state and (len(results) % max(1, concurrency) == 0):
+                save_crawl_state(output_dir, frontier, results, inflight_by_domain, state_path)
+
+    # Final save
+    if save_state:
+        save_crawl_state(output_dir, frontier, results, inflight_by_domain, state_path)
+
+    # Save index.json
     index_path = os.path.join(output_dir, "index.json")
     index_data = [asdict(r) for r in results]
     with open(index_path, "w", encoding="utf-8") as f:
         json.dump(index_data, f, ensure_ascii=False, indent=2)
 
-    return {"results": index_data, "index_path": index_path}
+    report_path = None
+    qa_obj = None
+    if synthesize_question:
+        qa_obj = ask_question(output_dir, synthesize_question, top_k=top_k_for_summary, model_name="sentence-transformers/all-MiniLM-L6-v2", synthesize=True)
+        report_path = generate_html_report(output_dir, results, qa=qa_obj)
+    return {"results": index_data, "index_path": index_path, "report_path": report_path, "qa": qa_obj}
 
 
 def discover_urls_by_query(query: str, max_results: int = 10) -> List[str]:
@@ -549,6 +643,9 @@ def build_vector_index(output_dir: str, model_name: str = "sentence-transformers
             passages.append(ch)
             meta.append({"path": path, "chunk": i})
 
+    if not passages:
+        raise RuntimeError("No passages produced from documents.")
+
     embeddings = model.encode(passages, normalize_embeddings=True, convert_to_numpy=True)
     dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
@@ -562,7 +659,36 @@ def build_vector_index(output_dir: str, model_name: str = "sentence-transformers
     return {"index_path": idx_path, "passages_path": os.path.join(output_dir, "passages.json")}
 
 
-def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str = "sentence-transformers/all-MiniLM-L6-v2") -> Dict:
+def summarize_passages(passages: List[str], max_sentences: int = 5) -> str:
+    # Lightweight extractive summarizer: rank sentences by term frequency across passages
+    if not passages:
+        return ""
+    text = "\n\n".join(passages)
+    # Split into sentences
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return text[:800]
+    # Build term frequency
+    def tokenize(s: str) -> List[str]:
+        return re.findall(r"[a-zA-Z0-9]+", s.lower())
+    tf: Dict[str, int] = {}
+    for s in sentences:
+        for tok in set(tokenize(s)):
+            tf[tok] = tf.get(tok, 0) + 1
+    # Score sentences by sum of token frequencies
+    scored = []
+    for s in sentences:
+        score = sum(tf.get(tok, 0) for tok in tokenize(s))
+        scored.append((score, s))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    top = [s for _, s in scored[:max_sentences]]
+    # Preserve original order where possible
+    order = {s: i for i, s in enumerate(sentences)}
+    top.sort(key=lambda s: order.get(s, 0))
+    return " ".join(top)
+
+def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", synthesize: bool = True) -> Dict:
     if np is None or faiss is None or SentenceTransformer is None:
         raise RuntimeError("Vector store dependencies not available. Please install requirements.")
     idx_path = os.path.join(output_dir, "index.faiss")
@@ -593,12 +719,13 @@ def ask_question(output_dir: str, question: str, top_k: int = 5, model_name: str
             "chunk": meta[i]["chunk"],
         })
 
-    answer = hits[0]["passage"] if hits else ""
-    return {"question": question, "answer": answer, "hits": hits}
+    extractive_answer = hits[0]["passage"] if hits else ""
+    summary = summarize_passages([h["passage"] for h in hits], max_sentences=5) if (synthesize and hits) else ""
+    return {"question": question, "answer": extractive_answer, "summary": summary, "hits": hits}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web (HTML/PDF/DOCX/EPUB) with concurrency, UA rotation, retry/backoff, prioritized frontier, build vector index, and Q&A.")
+    parser = argparse.ArgumentParser(description="AI Assistant: crawl the web (HTML/PDF/DOCX/EPUB) with concurrency, UA rotation, retry/backoff, prioritized frontier, build vector index, Q&A, resume, and reporting.")
     group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument("--query", type=str, help="Search query to discover pages (DuckDuckGo).")
     group.add_argument("--urls", nargs="+", help="Specific URLs to crawl.")
@@ -618,6 +745,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=2, help="Max retries on transient errors (429/5xx).")
     parser.add_argument("--backoff-base", type=float, default=0.5, help="Base backoff delay (seconds).")
     parser.add_argument("--backoff-jitter", type=float, default=0.2, help="Jitter added to backoff to avoid lockstep.")
+    parser.add_argument("--save-state", action="store_true", help="Persist crawl state for resume.")
+    parser.add_argument("--resume", action="store_true", help="Resume crawl from saved state.")
+    parser.add_argument("--state-path", type=str, default=None, help="Path to save/load crawl state (defaults to output_dir/crawl_state.json).")
+    parser.add_argument("--report", action="store_true", help="Generate HTML report summarizing crawl results.")
+    parser.add_argument("--synthesize", action="store_true", help="Use summarizer to synthesize answers from top-k passages.")
     return parser.parse_args()
 
 
@@ -631,8 +763,27 @@ def main():
         except Exception:
             user_agents = None
 
+    if args.report:
+        # Generate report from existing index and optional question
+        index_path = os.path.join(args.output_dir, "index.json")
+        results: List[CrawlResult] = []
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for r in data:
+                    results.append(CrawlResult(**r))
+            except Exception:
+                pass
+        qa_obj = None
+        if args.ask:
+            qa_obj = ask_question(output_dir=args.output_dir, question=args.ask, top_k=args.top_k, synthesize=args.synthesize)
+        report_path = generate_html_report(args.output_dir, results, qa=qa_obj)
+        print(json.dumps({"report_path": report_path, "qa": qa_obj}, ensure_ascii=False, indent=2))
+        return
+
     if args.ask:
-        res = ask_question(output_dir=args.output_dir, question=args.ask, top_k=args.top_k)
+        res = ask_question(output_dir=args.output_dir, question=args.ask, top_k=args.top_k, synthesize=args.synthesize)
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
     if args.build_index:
@@ -640,6 +791,7 @@ def main():
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
 
+    state_path = args.state_path or os.path.join(args.output_dir, "crawl_state.json")
     res = crawl(
         query=args.query,
         urls=args.urls,
@@ -656,6 +808,11 @@ def main():
         max_retries=args.max_retries,
         backoff_base=args.backoff_base,
         backoff_jitter=args.backoff_jitter,
+        save_state=args.save_state,
+        resume=args.resume,
+        state_path=state_path,
+        synthesize_question=args.ask if args.synthesize else None,
+        top_k_for_summary=args.top_k,
     )
     print(json.dumps(res, ensure_ascii=False, indent=2))
 
