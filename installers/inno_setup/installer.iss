@@ -30,6 +30,11 @@ Source: "..\..\templates\*"; DestDir: "{app}\templates"; Flags: ignoreversion re
 ; Bundle pre-configured data directory with sample files
 Source: "..\..\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Dirs]
+; Ensure runtime subfolders exist
+Name: "{app}\data\jobs"; Flags: uninsalwaysuninstall
+Name: "{app}\data\reports"; Flags: uninsalwaysuninstall
+
 [Icons]
 ; Create shortcuts
 Name: "{group}\AI Crawler Assistant Server"; Filename: "{app}\{#MyAppExeName}"
