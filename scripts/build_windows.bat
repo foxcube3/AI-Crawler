@@ -55,8 +55,8 @@ IF NOT EXIST %TEMPLATES% (
   exit /b 1
 )
 
-REM Build onefile executable for server.py
-pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
+REM Build onefile executable for server.py using venv python
+python -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
   --add-data "templates;templates" ^
   server.py
 
