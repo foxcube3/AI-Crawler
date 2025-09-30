@@ -16,6 +16,25 @@ Setup
    . .venv/bin/activate  # Windows: .venv\Scripts\activate
    pip install -r requirements.txt
 
+Windows build
+---------------
+Prerequisites:
+- Windows 10/11
+- Python 3.10+ on PATH
+- (Optional) Inno Setup 6 to create an installer
+
+Quick build steps:
+1. Open PowerShell or Command Prompt in the project root (the folder that contains `requirements.txt`).
+2. Run the bundled builder script to create a venv, install requirements, and run PyInstaller:
+
+  .\scripts\build_windows.bat
+
+3. If successful, the one-file server executable will be at `dist\AI_Crawler_Assistant_Server.exe`.
+
+Notes:
+- The builder script changes to the repository root before installing dependencies so you can run it from any working directory.
+- To produce an Inno Setup installer, open `installers\inno_setup\installer.iss` in Inno Setup and compile it after the executable is built.
+
 Usage
 - Search by query and crawl top results:
    python ai_crawler.py --query "large language models retrieval" --max-results 20 --output-dir data

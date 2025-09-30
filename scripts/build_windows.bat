@@ -4,26 +4,33 @@ setlocal
 REM Build Windows executable for AI Crawler Assistant (FastAPI server)
 REM Requirements: Python 3.10+, pip, and internet access to install dependencies
 
-REM Prefer the Python launcher (py) to avoid Microsoft Store alias issues
-set "PY_CMD="
-where py >nul 2>&1
-if %ERRORLEVEL%==0 (
-  py -3 -c "import sys" >nul 2>&1
-  if %ERRORLEVEL%==0 set "PY_CMD=py"
+REM Verbose logging: set BUILD_VERBOSE=1 in environment or pass --verbose / -v as first arg
+set "VERBOSE=0"
+if /I "%~1"=="--verbose" set "VERBOSE=1"
+if /I "%~1"=="-v" set "VERBOSE=1"
+if defined BUILD_VERBOSE set "VERBOSE=1"
+if "%VERBOSE%"=="1" (
+  echo [VERBOSE] Verbose mode enabled
+  echo [VERBOSE] Args: %*
 )
 
-REM Fallback to python if usable
+REM Build log (captures pip/pyinstaller output to avoid confusing the batch parser)
+set "BUILD_LOG=%TEMP%\ai_crawler_build.log"
+if "%VERBOSE%"=="1" echo [VERBOSE] Build log: %BUILD_LOG%
+set "INNER_CMD=%TEMP%\ai_crawler_inner.cmd"
+
+REM python
 if not defined PY_CMD (
   where python >nul 2>&1
   if %ERRORLEVEL%==0 (
-    python -c "import sys" >nul 2>&1
+    call python -c "import sys" >nul 2>&1
     if %ERRORLEVEL%==0 set "PY_CMD=python"
   )
 )
 
 REM Check that Python can import a standard library module (os)
 if defined PY_CMD (
-  %PY_CMD% -c "import os" >nul 2>&1
+  call %PY_CMD% -c "import os" >nul 2>&1
   if errorlevel 1 (
     echo Python installation is broken or missing standard libraries.
     echo Please reinstall Python from https://www.python.org/downloads/windows/
@@ -40,8 +47,16 @@ if not defined PY_CMD (
 )
 
 REM Create venv
+REM Change working directory to repository root (script is in scripts/)
+if "%VERBOSE%"=="1" echo [VERBOSE] Changing directory to repository root: "%~dp0\.."
+pushd "%~dp0\.." >nul 2>&1 || (
+  echo Failed to change directory to repository root.
+  exit /b 1
+)
+
 set "VENV_DIR=.venv"
-%PY_CMD% -m venv "%VENV_DIR%"
+if "%VERBOSE%"=="1" echo [VERBOSE] Creating virtual env at %VENV_DIR%
+call %PY_CMD% -m venv "%VENV_DIR%"
 if errorlevel 1 (
   echo Failed to create virtual environment.
   exit /b 1
@@ -53,34 +68,52 @@ if not exist "%VENV_PY%" (
   echo Virtual environment python not found at "%VENV_PY%".
   exit /b 1
 )
+if "%VERBOSE%"=="1" echo [VERBOSE] Using venv python: %VENV_PY%
 
 REM Activate venv (optional, but keeps PATH consistent for subprocesses)
 call "%VENV_DIR%\Scripts\activate"
 
 REM Upgrade pip and install requirements
-"%VENV_PY%" -m pip install --upgrade pip
+if "%VERBOSE%"=="1" echo [VERBOSE] Upgrading pip in virtualenv
+> "%INNER_CMD%" echo @echo off
+>> "%INNER_CMD%" echo "%VENV_PY%" -m pip install --upgrade pip ^> "%BUILD_LOG%" 2^>^&1
+call "%INNER_CMD%"
+del /f /q "%INNER_CMD%" >nul 2>&1
 if errorlevel 1 (
   echo Failed to upgrade pip.
+  echo --- pip upgrade log ---
+  type "%BUILD_LOG%"
   exit /b 1
 )
-
-"%VENV_PY%" -m pip install -r "..\requirements.txt"
-
-REM Install requirements from root folder
-if not exist "..\requirements.txt" (
-  echo requirements.txt not found in project root.
+REM Ensure requirements.txt exists in repository root and install
+if not exist "requirements.txt" (
+  echo requirements.txt not found in project root (%CD%).
+  popd >nul 2>&1
   exit /b 1
 )
-"%VENV_PY%" -m pip install -r "..\requirements.txt"
+if "%VERBOSE%"=="1" echo [VERBOSE] Installing requirements from %CD%\requirements.txt
+> "%INNER_CMD%" echo @echo off
+>> "%INNER_CMD%" echo "%VENV_PY%" -m pip install -r "requirements.txt" ^>> "%BUILD_LOG%" 2^>^&1
+call "%INNER_CMD%"
+del /f /q "%INNER_CMD%" >nul 2>&1
 if errorlevel 1 (
   echo Failed to install requirements from project root.
+  echo --- pip install log ---
+  type "%BUILD_LOG%"
+  popd >nul 2>&1
   exit /b 1
 )
 
 REM Install PyInstaller
-"%VENV_PY%" -m pip install pyinstaller
+if "%VERBOSE%"=="1" echo [VERBOSE] Installing PyInstaller into virtualenv
+> "%INNER_CMD%" echo @echo off
+>> "%INNER_CMD%" echo "%VENV_PY%" -m pip install pyinstaller ^>> "%BUILD_LOG%" 2^>^&1
+call "%INNER_CMD%"
+del /f /q "%INNER_CMD%" >nul 2>&1
 if errorlevel 1 (
   echo Failed to install PyInstaller.
+  echo --- pyinstaller pip install log ---
+  type "%BUILD_LOG%"
   exit /b 1
 )
 
@@ -102,6 +135,7 @@ REM Include installers directory if present
 set "INSTALLERS_DIR=installers"
 if exist "%INSTALLERS_DIR%" (
   set PYI_INSTALLERS=--add-data "installers;installers"
+  if "%VERBOSE%"=="1" echo [VERBOSE] Including installers in build: %INSTALLERS_DIR%
 ) else (
   echo installers directory not found. Skipping installers inclusion.
   set PYI_INSTALLERS=
@@ -113,16 +147,20 @@ if exist dist rmdir /s /q dist
 if exist AI_Crawler_Assistant_Server.spec del /q AI_Crawler_Assistant_Server.spec
 
 REM Build onefile executable for server.py using venv python
-"%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
-  --add-data "templates;templates" ^
-  --add-data "data;data" ^
-  %PYI_INSTALLERS% ^
-  server.py
+if "%VERBOSE%"=="1" echo [VERBOSE] Running PyInstaller (this may take a while)
+> "%INNER_CMD%" echo @echo off
+>> "%INNER_CMD%" echo "%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py ^> "%BUILD_LOG%" 2^>^&1
+call "%INNER_CMD%"
+del /f /q "%INNER_CMD%" >nul 2>&1
 
 if errorlevel 1 (
   echo PyInstaller build failed.
+  echo --- pyinstaller log ---
+  type "%BUILD_LOG%"
   exit /b 1
 )
 
 echo Build complete. Executable located at dist\AI_Crawler_Assistant_Server.exe
+if "%VERBOSE%"=="1" echo [VERBOSE] Build finished successfully
+popd >nul 2>&1
 endlocal
