@@ -55,9 +55,22 @@ IF NOT EXIST %TEMPLATES% (
   exit /b 1
 )
 
+REM Ensure data directory exists to include in bundle
+set DATA_DIR=data
+IF NOT EXIST %DATA_DIR% (
+  echo data directory not found. Creating empty data directory.
+  mkdir %DATA_DIR%
+)
+
+REM Clean previous build artifacts
+IF EXIST build rmdir /s /q build
+IF EXIST dist rmdir /s /q dist
+IF EXIST AI_Crawler_Assistant_Server.spec del /q AI_Crawler_Assistant_Server.spec
+
 REM Build onefile executable for server.py using venv python
 python -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
   --add-data "templates;templates" ^
+  --add-data "data;data" ^
   server.py
 
 IF ERRORLEVEL 1 (
