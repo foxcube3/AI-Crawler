@@ -54,12 +54,54 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if not exist "requirements.txt" (
+  echo requirements.txt not found. Creating a default requirements.txt file.
+  echo requests>=2.31.0 >> requirements.txt
+  echo beautifulsoup4>=4.12.3 >> requirements.txt
+  echo lxml>=4.9.3 >> requirements.txt  
+  echo trafilatura>=1.6.3 >> requirements.txt
+  echo langchain>=0.0.208 >> requirements.txt
+  echo duckduckgo-search>=6.3.5 >> requirements.txt
+  echo PyMuPDF>=1.22.5 >> requirements.txt
+  echo pdfminer.six>=20221105 >> requirements.txt
+  echo python-pptx>=0.6.21 >> requirements.txt
+  echo python-docx>=0.8.11 >> requirements.txt
+  echo openpyxl>=3.1.2 >> requirements.txt
+  echo ebooklib>=0.18 >> requirements.txt
+  echo pypdf>=3.14.0 >> requirements.txt
+  echo numpy>=1.25.0 >> requirements.txt
+  echo pandas>=2.1.0 >> requirements.txt
+  echo faiss-cpu>=1.7.4 >> requirements.txt
+  echo scikit-learn>=1.3.2 >> requirements.txt
+  echo sentence-transformers>=2.2.2 >> requirements.txt
+  echo python-multipart>=0.0.6 >> requirements.txt
+  echo fastapi>=0.103.0 >> requirements.txt
+  echo uvicorn>=0.23.0 >> requirements.txt
+  echo aiofiles>=23.1.0 >> requirements.txt
+  echo jinja2>=3.1.2 >> requirements.txt
+  echo itsdangerous>=2.1.2 >> requirements.txt
+  echo sse-starlette>=1.6.5 >> requirements.txt
+  echo transformers>=4.41.0 >> requirements.txt
+  echo torch>=2.2.0 >> requirements.txt
+  echo croniter>=1.4.1 >> requirements.txt
+  echo apscheduler>=3.10.4 >> requirements.txt
+  echo pyinstaller>=6.16.0 >> requirements.txt
+)
 "%VENV_PY%" -m pip install -r requirements.txt
 if errorlevel 1 (
   echo Failed to install requirements.
   exit /b 1
 )
-
+REM Install requirements from parent directory
+if not exist "..\requirements.txt" (
+  echo requirements.txt not found in parent directory.
+  exit /b 1
+)
+"%VENV_PY%" -m pip install -r "..\requirements.txt"
+if errorlevel 1 (
+  echo Failed to install requirements from parent directory.
+  exit /b 1
+)
 REM Install PyInstaller
 "%VENV_PY%" -m pip install pyinstaller
 if errorlevel 1 (
