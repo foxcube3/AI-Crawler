@@ -46,9 +46,9 @@ Prerequisites (Windows 10/11)
 - Inno Setup 6: https://jrsoftware.org/isdl.php
 
 Step 1: Build the Windows executable
-- Open Command Prompt in the project Script file
+- Open Command Prompt in the project Root
 - Run:
-  .\build_windows.bat
+  .\Scripts\build_windows.bat
 - On success, the server executable will be at:
   dist\AI_Crawler_Assistant_Server.exe
 
