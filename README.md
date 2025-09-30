@@ -76,6 +76,10 @@ Uninstall
 Troubleshooting
 - If Inno Setup can’t find the executable, run Step 1 to produce dist\AI_Crawler_Assistant_Server.exe
 - If PyInstaller build fails, ensure templates\ exists and rerun scripts\build_windows.bat
+- Error: "python.exe: No module named pyinstaller"
+  - Cause: PyInstaller isn’t installed in the active Python/venv.
+  - Fix (inside your venv): `python -m pip install --upgrade pip && python -m pip install pyinstaller`
+  - Or run the provided builder which installs it automatically: `scripts\build_windows.bat`
 - To include additional assets, adjust the --add-data flag in scripts\build_windows.bat and corresponding [Files] entries in installers\inno_setup\installer.iss
 
 Run the Server (Linux/macOS/Windows)
