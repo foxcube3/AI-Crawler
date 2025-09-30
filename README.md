@@ -192,6 +192,119 @@ Security and Etiquette
 - Use allowlist/denylist patterns to control domains and paths
 - Consider setting per_domain_delay and per_domain_concurrency conservatively for production crawls
 
+Curl Examples (API)
+Note: Replace localhost:8000 with your host/port.
+
+- Crawl by query:
+  curl -X POST http://localhost:8000/crawl ^
+       -H "Content-Type: application/json" ^
+       -d "{\"query\":\"large language models retrieval\",\"output_dir\":\"data\",\"max_results\":5,\"crawl_depth\":1}"
+
+- Build index:
+  curl -X POST http://localhost:8000/build-index ^
+       -H "Content-Type: application/json" ^
+       -d "{\"output_dir\":\"data\",\"model_name\":\"sentence-transformers/all-MiniLM-L6-v2\"}"
+
+- Ask question:
+  curl -X POST http://localhost:8000/ask ^
+       -H "Content-Type: application/json" ^
+       -d "{\"output_dir\":\"data\",\"question\":\"What are best practices for web crawling?\",\"top_k\":5,\"synthesize\":true}"
+
+- Generate report:
+  curl -X POST http://localhost:8000/report ^
+       -H "Content-Type: application/json" ^
+       -d "{\"output_dir\":\"data\",\"question\":\"Summarize main findings\",\"top_k\":5,\"synthesize\":true,\"page_size\":50,\"theme\":\"light\"}"
+
+- Create job:
+  curl -X POST http://localhost:8000/jobs ^
+       -H "Content-Type: application/json" ^
+       -d "{\"query\":\"large language models\",\"output_dir\":\"data\",\"max_results\":10}"
+
+- Stream job progress (SSE):
+  curl -N http://localhost:8000/jobs/<job_id>/stream
+
+- Job status:
+  curl http://localhost:8000/jobs/<job_id>/status
+
+- List jobs:
+  curl http://localhost:8000/jobs
+
+- Cancel job:
+  curl -X DELETE http://localhost:8000/jobs/<job_id>
+
+- Jobs CSV export:
+  curl -L "http://localhost:8000/jobs-csv?status=all"
+
+- Validate cron (requires croniter):
+  curl "http://localhost:8000/validate-cron?expr=*/15%20*%20*%20*%20*"
+
+- Analytics domain stats:
+  curl "http://localhost:8000/analytics/domain-stats"
+
+- Serve a generated report page:
+  curl "http://localhost:8000/reports?output_dir=data&file=report.html"
+
+Quickstart PowerShell (Windows)
+- Script: scripts\\quickstart.ps1
+- Download/Run:
+  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+  .\\scripts\\quickstart.ps1
+- This script creates a venv, installs requirements, starts the server, opens the Web UI, and runs sample API calls.
+Download: [scripts\\quickstart.ps1](file:///scripts/quickstart.ps1)
+
+Run as a Windows Service
+Option A: Using the PyInstaller executable and NSSM (recommended)
+- Build the executable via scripts\\build_windows.bat (dist\\AI_Crawler_Assistant_Server.exe)
+- Install NSSM: https://nssm.cc/download
+- Create the service:
+  nssm install AI-Crawler-Assistant "C:\\Program Files\\AI Crawler Assistant\\AI_Crawler_Assistant_Server.exe"
+- Set Startup directory to the install folder and ensure it has write access to data\\
+- Start the service:
+  nssm start AI-Crawler-Assistant
+Notes:
+- Use the Inno Setup installer for easy deployment to C:\\Program Files\\AI Crawler Assistant.
+- Logs can be redirected via NSSM I/O settings.
+
+Option B: Using pythonw.exe
+- Service binPath (example):
+  sc create AI-Crawler-Assistant binPath= "\"C:\\Python311\\pythonw.exe\" \"C:\\path\\to\\server.py\"" start= auto
+- Set the working directory in a wrapper script or run via NSSM if you hit permission issues.
+
+Run as a systemd Service (Linux)
+- Create unit file: /etc/systemd/system/ai-crawler.service
+- Example:
+  [Unit]
+  Description=AI Crawler Assistant
+  After=network.target
+
+  [Service]
+  Type=simple
+  WorkingDirectory=/opt/ai-crawler
+  Environment=PORT=8000
+  ExecStart=/usr/bin/python3 /opt/ai-crawler/server.py
+  Restart=on-failure
+  User=www-data
+  Group=www-data
+
+  [Install]
+  WantedBy=multi-user.target
+- Commands:
+  sudo systemctl daemon-reload
+  sudo systemctl enable ai-crawler
+  sudo systemctl start ai-crawler
+- Logs:
+  journalctl -u ai-crawler -f
+
+Screenshots
+- Web UI (/ui):
+  docs/screenshots/ui.png
+- Jobs dashboard (/jobs-ui):
+  docs/screenshots/jobs-ui.png
+To include screenshots:
+- Create the folder docs/screenshots/
+- Add ui.png and jobs-ui.png (PNG or JPG)
+- The README will automatically link them if present.
+
 Support
 - Issues and feature requests: open a ticket with logs from data/jobs and console output
 - Include Python version, OS, and steps to reproduce
