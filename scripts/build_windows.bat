@@ -4,16 +4,22 @@ setlocal
 REM Build Windows executable for AI Crawler Assistant (FastAPI server)
 REM Requirements: Python 3.10+, pip, and internet access to install dependencies
 
-REM Detect Python
-where python >nul 2>&1
+REM Detect Python or py launcher
+set PY_CMD=python
+where %PY_CMD% >nul 2>&1
 IF ERRORLEVEL 1 (
-  echo Python not found on PATH. Please install Python and ensure 'python' is available.
-  exit /b 1
+  where py >nul 2>&1
+  IF ERRORLEVEL 1 (
+    echo Python not found on PATH. Please install Python and ensure 'python' or 'py' is available.
+    exit /b 1
+  ) ELSE (
+    set PY_CMD=py
+  )
 )
 
 REM Create venv
 set VENV_DIR=.venv
-python -m venv %VENV_DIR%
+%PY_CMD% -m venv %VENV_DIR%
 IF ERRORLEVEL 1 (
   echo Failed to create virtual environment.
   exit /b 1
