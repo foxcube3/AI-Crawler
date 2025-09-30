@@ -96,7 +96,8 @@ if exist dist rmdir /s /q dist
 if exist AI_Crawler_Assistant_Server.spec del /q AI_Crawler_Assistant_Server.spec
 
 REM Build onefile executable for server.py using venv python
-"%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
+REM Use the correct module name casing for Python -m invocation (PyInstaller, not pyinstaller)
+"%VENV_PY%" -m PyInstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
   --add-data "templates;templates" ^
   --add-data "data;data" ^
   %PYI_INSTALLERS% ^
