@@ -77,3 +77,121 @@ Troubleshooting
 - If Inno Setup can’t find the executable, run Step 1 to produce dist\AI_Crawler_Assistant_Server.exe
 - If PyInstaller build fails, ensure templates\ exists and rerun scripts\build_windows.bat
 - To include additional assets, adjust the --add-data flag in scripts\build_windows.bat and corresponding [Files] entries in installers\inno_setup\installer.iss
+
+Run the Server (Linux/macOS/Windows)
+- From source (dev mode):
+  python server.py
+- Environment:
+  PORT=8000 by default. Change with:
+  PORT=8080 python server.py
+  On Windows (CMD):
+  set PORT=8080 && python server.py
+
+Access the Web UI and API
+- Web UI:
+  http://localhost:8000/ui
+- Jobs dashboard:
+  http://localhost:8000/jobs-ui
+- Report pages (after a crawl/report is generated):
+  http://localhost:8000/reports?output_dir=data&file=report.html
+- FastAPI interactive docs:
+  http://localhost:8000/docs
+
+Typical API Workflow
+1) Crawl by query
+   POST /crawl
+   JSON body:
+   {
+     "query": "large language models retrieval",
+     "output_dir": "data",
+     "max_results": 10,
+     "crawl_depth": 1
+   }
+2) Build an embedding index
+   POST /build-index
+   JSON body:
+   {
+     "output_dir": "data",
+     "model_name": "sentence-transformers/all-MiniLM-L6-v2"
+   }
+3) Ask questions over crawled corpus (RAG)
+   POST /ask
+   JSON body:
+   {
+     "output_dir": "data",
+     "question": "What are best practices for web crawling?",
+     "top_k": 5,
+     "synthesize": true
+   }
+4) Generate an HTML report
+   POST /report
+   JSON body:
+   {
+     "output_dir": "data",
+     "question": "Summarize main findings",
+     "top_k": 5,
+     "synthesize": true,
+     "page_size": 50,
+     "theme": "light"
+   }
+
+Jobs API (streaming and persistence)
+- Create a long-running crawl job:
+  POST /jobs
+  Body: same as CrawlRequest
+  Response: { "job_id": "<id>" }
+- Stream progress (Server-Sent Events):
+  GET /jobs/{job_id}/stream
+- Check status:
+  GET /jobs/{job_id}/status
+- List jobs:
+  GET /jobs
+- Cancel job:
+  DELETE /jobs/{job_id}
+- CSV export of jobs:
+  GET /jobs-csv
+Notes:
+- Streaming requires sse-starlette (already in requirements.txt).
+- Job metadata and events are persisted under data/jobs and data/app.db (SQLite).
+
+Scheduling
+- Create a schedule to run periodically:
+  POST /schedules
+  JSON body:
+  {
+    "interval_seconds": 3600,
+    "params": { "...": "CrawlRequest fields" }
+  }
+- Cron expression (requires croniter):
+  {
+    "cron_expr": "*/15 * * * *",
+    "params": { "...": "CrawlRequest fields" }
+  }
+- List schedules:
+  GET /schedules
+- Delete schedule:
+  DELETE /schedules/{schedule_id}
+Persistence:
+- Schedules are stored in SQLite (data/app.db) and mirrored to data/schedules.json.
+
+Data Layout
+- Text content: data/{domain}/{slug}.txt
+- Index file: data/index.json (may be list in legacy, or {results, stats} object)
+- Jobs:
+  data/jobs/{job_id}.meta.json
+  data/jobs/{job_id}.jsonl (progress events)
+- Reports: written to output_dir as paginated HTML files (e.g., report_1.html, report_2.html)
+
+Customization
+- Templates used by the server are under templates/
+- When built with PyInstaller, templates are bundled and loaded from the executable’s resources
+- You can add or modify templates (ui.html, jobs.html, job_detail.html) to change the UI
+
+Security and Etiquette
+- Respect robots.txt; crawler attempts to be polite with delays and concurrency limits
+- Use allowlist/denylist patterns to control domains and paths
+- Consider setting per_domain_delay and per_domain_concurrency conservatively for production crawls
+
+Support
+- Issues and feature requests: open a ticket with logs from data/jobs and console output
+- Include Python version, OS, and steps to reproduce
