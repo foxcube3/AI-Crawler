@@ -12,15 +12,18 @@ param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "Checking Python..." -ForegroundColor Cyan
-$python = Get-Command python -ErrorAction SilentlyContinue
-if (-not $python) {
-    Write-Error "Python not found on PATH. Install Python 3.10+ and ensure 'python' is available."
+$pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+if (-not $pythonCmd) {
+    $pythonCmd = Get-Command py -ErrorAction SilentlyContinue
+}
+if (-not $pythonCmd) {
+    Write-Error "Python not found on PATH. Install Python 3.10+ and ensure 'python' or 'py' is available."
 }
 
 $venvDir = ".venv"
 if (-not (Test-Path $venvDir)) {
     Write-Host "Creating virtual environment..." -ForegroundColor Cyan
-    python -m venv $venvDir
+& $pythonCmd.Path -m venv $venvDir
 }
 
 Write-Host "Activating virtual environment..." -ForegroundColor Cyan
