@@ -62,6 +62,15 @@ IF NOT EXIST %DATA_DIR% (
   mkdir %DATA_DIR%
 )
 
+REM Include installers directory if present
+set INSTALLERS_DIR=installers
+IF EXIST %INSTALLERS_DIR% (
+  set PYI_INSTALLERS=--add-data "installers;installers"
+) ELSE (
+  echo installers directory not found. Skipping installers inclusion.
+  set PYI_INSTALLERS=
+)
+
 REM Clean previous build artifacts
 IF EXIST build rmdir /s /q build
 IF EXIST dist rmdir /s /q dist
@@ -71,6 +80,7 @@ REM Build onefile executable for server.py using venv python
 python -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" ^
   --add-data "templates;templates" ^
   --add-data "data;data" ^
+  %PYI_INSTALLERS% ^
   server.py
 
 IF ERRORLEVEL 1 (
