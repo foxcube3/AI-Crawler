@@ -1,0 +1,78 @@
+### Environments are defined in rest-client.env.json (dev/staging/prod)
+### Use {{scheme}}://{{host}}:{{port}} to switch easily
+
+### Crawl by query
+POST {{scheme}}://{{host}}:{{port}}/crawl
+Content-Type: application/json
+
+{
+  "query": "large language models retrieval",
+  "output_dir": "data",
+  "max_results": 5,
+  "crawl_depth": 1
+}
+
+### Build index
+POST {{scheme}}://{{host}}:{{port}}/build-index
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "model_name": "sentence-transformers/all-MiniLM-L6-v2"
+}
+
+### Ask question
+POST {{scheme}}://{{host}}:{{port}}/ask
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "question": "What are best practices for web crawling?",
+  "top_k": 5,
+  "synthesize": true
+}
+
+### Generate report
+POST {{scheme}}://{{host}}:{{port}}/report
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "question": "Summarize main findings",
+  "top_k": 5,
+  "synthesize": true,
+  "page_size": 50,
+  "theme": "light"
+}
+
+### Create job
+POST {{scheme}}://{{host}}:{{port}}/jobs
+Content-Type: application/json
+
+{
+  "query": "large language models",
+  "output_dir": "data",
+  "max_results": 10
+}
+
+### Job status (replace <job_id>)
+GET {{scheme}}://{{host}}:{{port}}/jobs/<job_id>/status
+
+### List jobs
+GET {{scheme}}://{{host}}:{{port}}/jobs
+
+### Cancel job (replace <job_id>)
+DELETE {{scheme}}://{{host}}:{{port}}/jobs/<job_id>
+
+### Jobs CSV export
+GET {{scheme}}://{{host}}:{{port}}/jobs-csv?status=all
+
+### Validate cron expression
+GET {{scheme}}://{{host}}:{{port}}/validate-cron?expr=*/15%20*%20*%20*%20*
+
+### Analytics domain stats
+GET {{scheme}}://{{host}}:{{port}}/analytics/domain-stats
+
+### Serve a generated report page
+# Replace file with a specific report file (e.g., report_1.html)
+GET {{scheme}}://{{host}}:{{port}}/reports?output_dir=data&file=report.html
