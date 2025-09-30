@@ -1,9 +1,8 @@
-@host = localhost
-@port = 8000
-@base = http://{{host}}:{{port}}
+### Environments are defined in rest-client.env.json (dev/staging/prod)
+### Use {{scheme}}://{{host}}:{{port}} to switch easily
 
 ### Crawl by query
-POST {{base}}/crawl
+POST {{scheme}}://{{host}}:{{port}}/crawl
 Content-Type: application/json
 
 {
@@ -14,7 +13,7 @@ Content-Type: application/json
 }
 
 ### Build index
-POST {{base}}/build-index
+POST {{scheme}}://{{host}}:{{port}}/build-index
 Content-Type: application/json
 
 {
@@ -23,7 +22,7 @@ Content-Type: application/json
 }
 
 ### Ask question
-POST {{base}}/ask
+POST {{scheme}}://{{host}}:{{port}}/ask
 Content-Type: application/json
 
 {
@@ -34,7 +33,7 @@ Content-Type: application/json
 }
 
 ### Generate report
-POST {{base}}/report
+POST {{scheme}}://{{host}}:{{port}}/report
 Content-Type: application/json
 
 {
@@ -47,7 +46,7 @@ Content-Type: application/json
 }
 
 ### Create job
-POST {{base}}/jobs
+POST {{scheme}}://{{host}}:{{port}}/jobs
 Content-Type: application/json
 
 {
@@ -57,23 +56,23 @@ Content-Type: application/json
 }
 
 ### Job status (replace <job_id>)
-GET {{base}}/jobs/<job_id>/status
+GET {{scheme}}://{{host}}:{{port}}/jobs/<job_id>/status
 
 ### List jobs
-GET {{base}}/jobs
+GET {{scheme}}://{{host}}:{{port}}/jobs
 
 ### Cancel job (replace <job_id>)
-DELETE {{base}}/jobs/<job_id>
+DELETE {{scheme}}://{{host}}:{{port}}/jobs/<job_id>
 
 ### Jobs CSV export
-GET {{base}}/jobs-csv?status=all
+GET {{scheme}}://{{host}}:{{port}}/jobs-csv?status=all
 
 ### Validate cron expression
-GET {{base}}/validate-cron?expr=*/15%20*%20*%20*%20*
+GET {{scheme}}://{{host}}:{{port}}/validate-cron?expr=*/15%20*%20*%20*%20*
 
 ### Analytics domain stats
-GET {{base}}/analytics/domain-stats
+GET {{scheme}}://{{host}}:{{port}}/analytics/domain-stats
 
 ### Serve a generated report page
 # Replace file with a specific report file (e.g., report_1.html)
-GET {{base}}/reports?output_dir=data&file=report.html
+GET {{scheme}}://{{host}}:{{port}}/reports?output_dir=data&file=report.html
