@@ -1,0 +1,79 @@
+@host = localhost
+@port = 8000
+@base = http://{{host}}:{{port}}
+
+### Crawl by query
+POST {{base}}/crawl
+Content-Type: application/json
+
+{
+  "query": "large language models retrieval",
+  "output_dir": "data",
+  "max_results": 5,
+  "crawl_depth": 1
+}
+
+### Build index
+POST {{base}}/build-index
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "model_name": "sentence-transformers/all-MiniLM-L6-v2"
+}
+
+### Ask question
+POST {{base}}/ask
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "question": "What are best practices for web crawling?",
+  "top_k": 5,
+  "synthesize": true
+}
+
+### Generate report
+POST {{base}}/report
+Content-Type: application/json
+
+{
+  "output_dir": "data",
+  "question": "Summarize main findings",
+  "top_k": 5,
+  "synthesize": true,
+  "page_size": 50,
+  "theme": "light"
+}
+
+### Create job
+POST {{base}}/jobs
+Content-Type: application/json
+
+{
+  "query": "large language models",
+  "output_dir": "data",
+  "max_results": 10
+}
+
+### Job status (replace <job_id>)
+GET {{base}}/jobs/<job_id>/status
+
+### List jobs
+GET {{base}}/jobs
+
+### Cancel job (replace <job_id>)
+DELETE {{base}}/jobs/<job_id>
+
+### Jobs CSV export
+GET {{base}}/jobs-csv?status=all
+
+### Validate cron expression
+GET {{base}}/validate-cron?expr=*/15%20*%20*%20*%20*
+
+### Analytics domain stats
+GET {{base}}/analytics/domain-stats
+
+### Serve a generated report page
+# Replace file with a specific report file (e.g., report_1.html)
+GET {{base}}/reports?output_dir=data&file=report.html
