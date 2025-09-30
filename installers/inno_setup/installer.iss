@@ -25,6 +25,10 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; Include the built executable from PyInstaller
 Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Bundle example templates so users can customize UI and reports
+Source: "..\..\templates\*"; DestDir: "{app}\templates"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundle pre-configured data directory with sample files
+Source: "..\..\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Create shortcuts
