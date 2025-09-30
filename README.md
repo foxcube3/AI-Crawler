@@ -195,52 +195,59 @@ Security and Etiquette
 Curl Examples (API)
 Note: Replace localhost:8000 with your host/port.
 
+Bash/macOS/Linux (use backslashes or single-line)
 - Crawl by query:
-  curl -X POST http://localhost:8000/crawl ^
-       -H "Content-Type: application/json" ^
-       -d "{\"query\":\"large language models retrieval\",\"output_dir\":\"data\",\"max_results\":5,\"crawl_depth\":1}"
-
+  curl -X POST http://localhost:8000/crawl -H "Content-Type: application/json" -d '{"query":"large language models retrieval","output_dir":"data","max_results":5,"crawl_depth":1}'
 - Build index:
-  curl -X POST http://localhost:8000/build-index ^
-       -H "Content-Type: application/json" ^
-       -d "{\"output_dir\":\"data\",\"model_name\":\"sentence-transformers/all-MiniLM-L6-v2\"}"
-
+  curl -X POST http://localhost:8000/build-index -H "Content-Type: application/json" -d '{"output_dir":"data","model_name":"sentence-transformers/all-MiniLM-L6-v2"}'
 - Ask question:
-  curl -X POST http://localhost:8000/ask ^
-       -H "Content-Type: application/json" ^
-       -d "{\"output_dir\":\"data\",\"question\":\"What are best practices for web crawling?\",\"top_k\":5,\"synthesize\":true}"
-
+  curl -X POST http://localhost:8000/ask -H "Content-Type: application/json" -d '{"output_dir":"data","question":"What are best practices for web crawling?","top_k":5,"synthesize":true}'
 - Generate report:
-  curl -X POST http://localhost:8000/report ^
-       -H "Content-Type: application/json" ^
-       -d "{\"output_dir\":\"data\",\"question\":\"Summarize main findings\",\"top_k\":5,\"synthesize\":true,\"page_size\":50,\"theme\":\"light\"}"
-
+  curl -X POST http://localhost:8000/report -H "Content-Type: application/json" -d '{"output_dir":"data","question":"Summarize main findings","top_k":5,"synthesize":true,"page_size":50,"theme":"light"}'
 - Create job:
-  curl -X POST http://localhost:8000/jobs ^
-       -H "Content-Type: application/json" ^
-       -d "{\"query\":\"large language models\",\"output_dir\":\"data\",\"max_results\":10}"
-
+  curl -X POST http://localhost:8000/jobs -H "Content-Type: application/json" -d '{"query":"large language models","output_dir":"data","max_results":10}'
 - Stream job progress (SSE):
   curl -N http://localhost:8000/jobs/<job_id>/stream
-
 - Job status:
   curl http://localhost:8000/jobs/<job_id>/status
-
 - List jobs:
   curl http://localhost:8000/jobs
-
 - Cancel job:
   curl -X DELETE http://localhost:8000/jobs/<job_id>
-
 - Jobs CSV export:
   curl -L "http://localhost:8000/jobs-csv?status=all"
-
 - Validate cron (requires croniter):
   curl "http://localhost:8000/validate-cron?expr=*/15%20*%20*%20*%20*"
-
 - Analytics domain stats:
   curl "http://localhost:8000/analytics/domain-stats"
+- Serve a generated report page:
+  curl "http://localhost:8000/reports?output_dir=data&file=report.html"
 
+Windows CMD (curl) one-liners
+- Crawl by query:
+  curl -X POST http://localhost:8000/crawl -H "Content-Type: application/json" -d "{\"query\":\"large language models retrieval\",\"output_dir\":\"data\",\"max_results\":5,\"crawl_depth\":1}"
+- Build index:
+  curl -X POST http://localhost:8000/build-index -H "Content-Type: application/json" -d "{\"output_dir\":\"data\",\"model_name\":\"sentence-transformers/all-MiniLM-L6-v2\"}"
+- Ask question:
+  curl -X POST http://localhost:8000/ask -H "Content-Type: application/json" -d "{\"output_dir\":\"data\",\"question\":\"What are best practices for web crawling?\",\"top_k\":5,\"synthesize\":true}"
+- Generate report:
+  curl -X POST http://localhost:8000/report -H "Content-Type: application/json" -d "{\"output_dir\":\"data\",\"question\":\"Summarize main findings\",\"top_k\":5,\"synthesize\":true,\"page_size\":50,\"theme\":\"light\"}"
+- Create job:
+  curl -X POST http://localhost:8000/jobs -H "Content-Type: application/json" -d "{\"query\":\"large language models\",\"output_dir\":\"data\",\"max_results\":10}"
+- Stream job progress (SSE):
+  curl -N http://localhost:8000/jobs/<job_id>/stream
+- Job status:
+  curl http://localhost:8000/jobs/<job_id>/status
+- List jobs:
+  curl http://localhost:8000/jobs
+- Cancel job:
+  curl -X DELETE http://localhost:8000/jobs/<job_id>
+- Jobs CSV export:
+  curl -L "http://localhost:8000/jobs-csv?status=all"
+- Validate cron (requires croniter):
+  curl "http://localhost:8000/validate-cron?expr=*/15%20*%20*%20*%20*"
+- Analytics domain stats:
+  curl "http://localhost:8000/analytics/domain-stats"
 - Serve a generated report page:
   curl "http://localhost:8000/reports?output_dir=data&file=report.html"
 
