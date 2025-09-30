@@ -251,6 +251,87 @@ Windows CMD (curl) one-liners
 - Serve a generated report page:
   curl "http://localhost:8000/reports?output_dir=data&file=report.html"
 
+PowerShell Examples (Invoke-RestMethod)
+$port = 8000
+
+- Crawl by query:
+  $body = @{
+    query = "large language models retrieval"
+    output_dir = "data"
+    max_results = 5
+    crawl_depth = 1
+  } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "http://localhost:$port/crawl" -ContentType "application/json" -Body $body
+
+- Build index:
+  $body = @{
+    output_dir = "data"
+    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+  } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "http://localhost:$port/build-index" -ContentType "application/json" -Body $body
+
+- Ask question:
+  $body = @{
+    output_dir = "data"
+    question = "What are best practices for web crawling?"
+    top_k = 5
+    synthesize = $true
+  } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "http://localhost:$port/ask" -ContentType "application/json" -Body $body
+
+- Generate report:
+  $body = @{
+    output_dir = "data"
+    question = "Summarize main findings"
+    top_k = 5
+    synthesize = $true
+    page_size = 50
+    theme = "light"
+  } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "http://localhost:$port/report" -ContentType "application/json" -Body $body
+
+- Create job:
+  $body = @{
+    query = "large language models"
+    output_dir = "data"
+    max_results = 10
+  } | ConvertTo-Json
+  Invoke-RestMethod -Method Post -Uri "http://localhost:$port/jobs" -ContentType "application/json" -Body $body
+
+- Job status:
+  Invoke-RestMethod -Method Get -Uri "http://localhost:$port/jobs/<job_id>/status"
+
+- List jobs:
+  Invoke-RestMethod -Method Get -Uri "http://localhost:$port/jobs"
+
+- Cancel job:
+  Invoke-RestMethod -Method Delete -Uri "http://localhost:$port/jobs/<job_id>"
+
+- Jobs CSV export:
+  Invoke-RestMethod -Method Get -Uri "http://localhost:$port/jobs-csv?status=all"
+
+- Validate cron:
+  Invoke-RestMethod -Method Get -Uri "http://localhost:$port/validate-cron?expr=*/15%20*%20*%20*%20*"
+
+- Analytics domain stats:
+  Invoke-RestMethod -Method Get -Uri "http://localhost:$port/analytics/domain-stats"
+
+- Serve a generated report page (returns HTML):
+  Invoke-WebRequest -Uri "http://localhost:$port/reports?output_dir=data&file=report.html"
+
+Quoting and Escaping Tips
+- Bash/macOS/Linux:
+  Use single quotes for JSON bodies to avoid escaping double quotes:
+  curl -d '{"key":"value"}'
+- Windows CMD:
+  Use double quotes and escape inner quotes with backslashes:
+  curl -d "{\"key\":\"value\"}"
+  CMD doesn’t support caret continuations inside quotes reliably; prefer one-liners.
+- PowerShell:
+  Build JSON with a hashtable and ConvertTo-Json to avoid manual escaping:
+  $body = @{ key = "value" } | ConvertTo-Json
+  Invoke-RestMethod -Body $body -ContentType "application/json"
+
 Quickstart PowerShell (Windows)
 - Script: scripts\\quickstart.ps1
 - Download/Run:
