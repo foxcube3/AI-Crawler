@@ -17,7 +17,6 @@ if "%VERBOSE%"=="1" (
 REM Build log (captures pip/pyinstaller output to avoid confusing the batch parser)
 set "BUILD_LOG=%TEMP%\ai_crawler_build.log"
 if "%VERBOSE%"=="1" echo [VERBOSE] Build log: %BUILD_LOG%
-set "INNER_CMD=%TEMP%\ai_crawler_inner.cmd"
 
 REM python
 if not defined PY_CMD (
@@ -81,16 +80,14 @@ call "%VENV_DIR%\Scripts\activate"
 
 REM Upgrade pip and install requirements
 if "%VERBOSE%"=="1" echo [VERBOSE] Upgrading pip in virtualenv
-> "%INNER_CMD%" echo @echo off
->> "%INNER_CMD%" echo "%VENV_PY%" -m pip install --upgrade pip ^> "%BUILD_LOG%" 2^>^&1
-call "%INNER_CMD%"
-del /f /q "%INNER_CMD%" >nul 2>&1
+"%VENV_PY%" -m pip install --upgrade pip > "%BUILD_LOG%" 2>&1
 if errorlevel 1 (
   echo Failed to upgrade pip.
   echo --- pip upgrade log ---
   type "%BUILD_LOG%"
   exit /b 1
 )
+
 REM Ensure requirements.txt exists in repository root and install
 if not exist "requirements.txt" (
   echo requirements.txt not found in project root (%CD%).
@@ -98,10 +95,7 @@ if not exist "requirements.txt" (
   exit /b 1
 )
 if "%VERBOSE%"=="1" echo [VERBOSE] Installing requirements from %CD%\requirements.txt
-> "%INNER_CMD%" echo @echo off
->> "%INNER_CMD%" echo "%VENV_PY%" -m pip install -r "requirements.txt" ^>> "%BUILD_LOG%" 2^>^&1
-call "%INNER_CMD%"
-del /f /q "%INNER_CMD%" >nul 2>&1
+"%VENV_PY%" -m pip install -r "requirements.txt" >> "%BUILD_LOG%" 2>&1
 if errorlevel 1 (
   echo Failed to install requirements from project root.
   echo --- pip install log ---
@@ -112,10 +106,7 @@ if errorlevel 1 (
 
 REM Install PyInstaller
 if "%VERBOSE%"=="1" echo [VERBOSE] Installing PyInstaller into virtualenv
-> "%INNER_CMD%" echo @echo off
->> "%INNER_CMD%" echo "%VENV_PY%" -m pip install pyinstaller ^>> "%BUILD_LOG%" 2^>^&1
-call "%INNER_CMD%"
-del /f /q "%INNER_CMD%" >nul 2>&1
+"%VENV_PY%" -m pip install pyinstaller >> "%BUILD_LOG%" 2>&1
 if errorlevel 1 (
   echo Failed to install PyInstaller.
   echo --- pyinstaller pip install log ---
@@ -154,10 +145,7 @@ if exist AI_Crawler_Assistant_Server.spec del /q AI_Crawler_Assistant_Server.spe
 
 REM Build onefile executable for server.py using venv python
 if "%VERBOSE%"=="1" echo [VERBOSE] Running PyInstaller (this may take a while)
-> "%INNER_CMD%" echo @echo off
->> "%INNER_CMD%" echo "%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py ^> "%BUILD_LOG%" 2^>^&1
-call "%INNER_CMD%"
-del /f /q "%INNER_CMD%" >nul 2>&1
+"%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py > "%BUILD_LOG%" 2>&1
 
 if errorlevel 1 (
   echo PyInstaller build failed.
