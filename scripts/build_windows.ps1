@@ -29,9 +29,8 @@ $forwardArgs = @()
 if ($BuildVerbose) { $forwardArgs += "--verbose" }
 if ($ExtraArgs -and $ExtraArgs.Length -gt 0) { $forwardArgs += $ExtraArgs }
 
-# Quote each arg for cmd safety
-$quotedArgs = $forwardArgs | ForEach-Object { '"{0}"' -f ($_ -replace '"','\"') }
-$argLine = ($quotedArgs -join ' ')
+# Build a plain argument string without extra quoting (avoid nested quotes issues)
+$argLine = ($forwardArgs -join ' ')
 
 Write-Host "Running build via cmd.exe: $batch $argLine"
 $cmd = "cmd.exe /c `"$batch $argLine`""
