@@ -85,7 +85,7 @@ if ($Native) {
   if (-not (Test-Path "data")) { if ($BuildVerbose) { Write-Host "[VERBOSE] Creating data directory" }; New-Item -ItemType Directory -Path "data" | Out-Null }
 
   # PyInstaller build
-  $pyiArgs = @("-m","pyinstaller","--noconfirm","--clean","--onefile","--name","AI_Crawler_Assistant_Server","--add-data","templates;templates","--add-data","data;data","server.py")
+  $pyiArgs = @("-m","PyInstaller","--noconfirm","--clean","--onefile","--name","AI_Crawler_Assistant_Server","--add-data","templates;templates","--add-data","data;data","server.py")
   if (Test-Path "installers") { if ($BuildVerbose) { Write-Host "[VERBOSE] Including installers in build" }; $pyiArgs += @("--add-data","installers;installers") }
   Invoke-OrFail -ExePath $venvPy -Args $pyiArgs
 
