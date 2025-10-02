@@ -49,7 +49,8 @@ if not defined PY_CMD (
 REM Create venv
 REM Change working directory to repository root (script is in scripts/)
 if "%VERBOSE%"=="1" echo [VERBOSE] Changing directory to repository root: "%~dp0\.."
-pushd "%~dp0\.." >nul 2>&1 || (
+pushd "%~dp0\.." >nul 2>&1
+if errorlevel 1 (
   echo Failed to change directory to repository root.
   exit /b 1
 )
