@@ -24,16 +24,50 @@ Prerequisites:
 - (Optional) Inno Setup 6 to create an installer
 
 Quick build steps:
-1. Open PowerShell or Command Prompt in the project root (the folder that contains `requirements.txt`).
-2. Run the bundled builder script to create a venv, install requirements, and run PyInstaller:
 
-  .\scripts\build_windows.bat
+Option A (PowerShell, recommended):
+1. Open PowerShell in the project root (the folder that contains `requirements.txt`).
+2. If you see an execution policy warning, allow scripts for this session:
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+3. Run the PowerShell wrapper, which forwards args to the batch script and streams output:
+   ./scripts/build_windows.ps1 -Verbose
+   (You can omit -Verbose if you prefer)
 
-3. If successful, the one-file server executable will be at `dist\AI_Crawler_Assistant_Server.exe`.
+Option B (Command Prompt - cmd.exe):
+1. Open Command Prompt in the project root.
+2. Run the batch script directly:
+   scripts\build_windows.bat -v
+
+Result:
+- On success, the one-file server executable will be at:
+  dist\AI_Crawler_Assistant_Server.exe
 
 Notes:
-- The builder script changes to the repository root before installing dependencies so you can run it from any working directory.
+- The builder changes to the repository root before installing dependencies so you can run it from any working directory.
+- If Python on PATH is a Microsoft Store alias, disable App execution aliases (Settings > Apps > Advanced app settings > App execution aliases) or install Python from python.org.
 - To produce an Inno Setup installer, open `installers\inno_setup\installer.iss` in Inno Setup and compile it after the executable is built.
+
+PowerShell troubleshooting
+- Execution policy prevents scripts:
+  - Fix for current session:
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+- Error: ". was unexpected at this time" when running the batch from PowerShell:
+  - Cause: PowerShell parsing differences with certain cmd.exe chaining.
+  - Fix: Use the wrapper:
+    ./scripts/build_windows.ps1 -Verbose
+    or run via cmd explicitly:
+    cmd.exe /c "scripts\build_windows.bat -v"
+- View detailed build logs written by the batch:
+  - Logs are written to: $env:TEMP\ai_crawler_build.log
+  - Tail the log:
+    Get-Content $env:TEMP\ai_crawler_build.log -Tail 200 -Wait
+- Python not found or Store alias:
+  - Disable App execution aliases for python/python3 (Settings > Apps > Advanced app settings > App execution aliases) or install Python from python.org and ensure it’s on PATH.
+- Clean previous build artifacts if a build fails:
+  Remove-Item -Recurse -Force .\dist, .\build
+  Remove-Item -Force .\AI_Crawler_Assistant_Server.spec
+- Virtual environment notes:
+  - The builder creates and uses .venv automatically; you don’t need to activate it manually.
 
 Usage
 - Search by query and crawl top results:
