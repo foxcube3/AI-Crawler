@@ -24,15 +24,27 @@ Prerequisites:
 - (Optional) Inno Setup 6 to create an installer
 
 Quick build steps:
-1. Open PowerShell or Command Prompt in the project root (the folder that contains `requirements.txt`).
-2. Run the bundled builder script to create a venv, install requirements, and run PyInstaller:
 
-  .\scripts\build_windows.bat
+Option A (PowerShell, recommended):
+1. Open PowerShell in the project root (the folder that contains `requirements.txt`).
+2. If you see an execution policy warning, allow scripts for this session:
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+3. Run the PowerShell wrapper, which forwards args to the batch script and streams output:
+   ./scripts/build_windows.ps1 -Verbose
+   (You can omit -Verbose if you prefer)
 
-3. If successful, the one-file server executable will be at `dist\AI_Crawler_Assistant_Server.exe`.
+Option B (Command Prompt - cmd.exe):
+1. Open Command Prompt in the project root.
+2. Run the batch script directly:
+   scripts\build_windows.bat -v
+
+Result:
+- On success, the one-file server executable will be at:
+  dist\AI_Crawler_Assistant_Server.exe
 
 Notes:
-- The builder script changes to the repository root before installing dependencies so you can run it from any working directory.
+- The builder changes to the repository root before installing dependencies so you can run it from any working directory.
+- If Python on PATH is a Microsoft Store alias, disable App execution aliases (Settings > Apps > Advanced app settings > App execution aliases) or install Python from python.org.
 - To produce an Inno Setup installer, open `installers\inno_setup\installer.iss` in Inno Setup and compile it after the executable is built.
 
 Usage
