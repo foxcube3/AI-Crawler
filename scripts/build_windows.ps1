@@ -4,6 +4,12 @@ param(
   [string[]]$ExtraArgs
 )
 
+# Map built-in PowerShell -Verbose to our -BuildVerbose flag if provided
+# This allows: ./scripts/build_windows.ps1 -Verbose
+if ($PSBoundParameters.ContainsKey('Verbose') -and $PSBoundParameters['Verbose']) {
+  $BuildVerbose = $true
+}
+
 # PowerShell wrapper to run the cmd batch under cmd.exe to avoid PowerShell parsing issues
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Join-Path $scriptDir ".."

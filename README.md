@@ -31,7 +31,7 @@ Option A (PowerShell, recommended):
    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 3. Run the PowerShell wrapper, which forwards args to the batch script and streams output:
    ./scripts/build_windows.ps1 -BuildVerbose
-   (You can omit -BuildVerbose if you prefer)
+   (You can omit -BuildVerbose if you prefer; you can also use the built-in -Verbose flag)
 
 Option B (Command Prompt - cmd.exe):
 1. Open Command Prompt in the project root.
