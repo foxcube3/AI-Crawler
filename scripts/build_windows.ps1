@@ -1,8 +1,14 @@
 param(
-  [switch]$Verbose,
+  [switch]$BuildVerbose,
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$ExtraArgs
 )
+
+# Map built-in PowerShell -Verbose to our -BuildVerbose flag if provided
+# This allows: ./scripts/build_windows.ps1 -Verbose
+if ($PSBoundParameters.ContainsKey('Verbose') -and $PSBoundParameters['Verbose']) {
+  $BuildVerbose = $true
+}
 
 # PowerShell wrapper to run the cmd batch under cmd.exe to avoid PowerShell parsing issues
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -15,12 +21,12 @@ if (-not (Test-Path $batch)) {
   exit 1
 }
 
-# If -Verbose is passed, also set BUILD_VERBOSE=1 for the batch script
-if ($Verbose) { $env:BUILD_VERBOSE = "1" }
+# If -BuildVerbose is passed, also set BUILD_VERBOSE=1 for the batch script
+if ($BuildVerbose) { $env:BUILD_VERBOSE = "1" }
 
 # Compose arguments to forward to the batch script
 $forwardArgs = @()
-if ($Verbose) { $forwardArgs += "--verbose" }
+if ($BuildVerbose) { $forwardArgs += "--verbose" }
 if ($ExtraArgs -and $ExtraArgs.Length -gt 0) { $forwardArgs += $ExtraArgs }
 
 # Quote each arg for cmd safety
