@@ -23,12 +23,30 @@ function Invoke-OrFail {
     [string]$ExePath,
     [string[]]$Args
   )
+  # Normalize and validate arguments to avoid nulls in ArgumentList
+  if ($null -eq $Args) { $Args = @() } else { $Args = @($Args) | Where-Object { $_ -ne $null -and $_ -ne "" } }
   if ($BuildVerbose) { Write-Host "[VERBOSE] Command: $ExePath $($Args -join ' ')" }
-  $p = Start-Process -FilePath $ExePath -ArgumentList $Args -NoNewWindow -Wait -PassThru -RedirectStandardOutput $buildLog -RedirectStandardError $buildLog
-  if ($p.ExitCode -ne 0) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $ExePath
+  $psi.Arguments = ($Args -join ' ')
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $false
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  $p.Start() | Out-Null
+  $p.WaitForExit()
+  $exitCode = $p.ExitCode
+  # Append output to build log
+  $stdout = $p.StandardOutput.ReadToEnd()
+  $stderr = $p.StandardError.ReadToEnd()
+  if ($stdout) { $stdout | Out-File -FilePath $buildLog -Append }
+  if ($stderr) { $stderr | Out-File -FilePath $buildLog -Append }
+  if ($exitCode -ne 0) {
     Write-Host "Command failed: $ExePath $($Args -join ' ')"
     Get-Content $buildLog | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }
-    exit $p.ExitCode
+    exit $exitCode
   }
 }
 
