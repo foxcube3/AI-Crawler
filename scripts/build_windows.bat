@@ -75,18 +75,11 @@ if not exist "%VENV_PY%" (
 )
 if "%VERBOSE%"=="1" echo [VERBOSE] Using venv python: %VENV_PY%
 
-REM Activate venv (optional, but keeps PATH consistent for subprocesses)
-call "%VENV_DIR%\Scripts\activate"
-
+REM Do not activate venv; use explicit venv python for all commands
 REM Upgrade pip and install requirements
 if "%VERBOSE%"=="1" echo [VERBOSE] Upgrading pip in virtualenv
 "%VENV_PY%" -m pip install --upgrade pip > "%BUILD_LOG%" 2>&1
-if errorlevel 1 (
-  echo Failed to upgrade pip.
-  echo --- pip upgrade log ---
-  type "%BUILD_LOG%"
-  exit /b 1
-)
+if %ERRORLEVEL% NEQ 0 echo Failed to upgrade pip.& echo --- pip upgrade log ---& type "%BUILD_LOG%"& exit /b 1
 
 REM Ensure requirements.txt exists in repository root and install
 if not exist "requirements.txt" (
@@ -96,23 +89,12 @@ if not exist "requirements.txt" (
 )
 if "%VERBOSE%"=="1" echo [VERBOSE] Installing requirements from %CD%\requirements.txt
 "%VENV_PY%" -m pip install -r "requirements.txt" >> "%BUILD_LOG%" 2>&1
-if errorlevel 1 (
-  echo Failed to install requirements from project root.
-  echo --- pip install log ---
-  type "%BUILD_LOG%"
-  popd >nul 2>&1
-  exit /b 1
-)
+if %ERRORLEVEL% NEQ 0 echo Failed to install requirements from project root.& echo --- pip install log ---& type "%BUILD_LOG%"& popd >nul 2>&1& exit /b 1
 
 REM Install PyInstaller
 if "%VERBOSE%"=="1" echo [VERBOSE] Installing PyInstaller into virtualenv
 "%VENV_PY%" -m pip install pyinstaller >> "%BUILD_LOG%" 2>&1
-if errorlevel 1 (
-  echo Failed to install PyInstaller.
-  echo --- pyinstaller pip install log ---
-  type "%BUILD_LOG%"
-  exit /b 1
-)
+if %ERRORLEVEL% NEQ 0 echo Failed to install PyInstaller.& echo --- pyinstaller pip install log ---& type "%BUILD_LOG%"& exit /b 1
 
 REM Ensure templates are bundled with the executable
 set "TEMPLATES=templates"
@@ -147,12 +129,7 @@ REM Build onefile executable for server.py using venv python
 if "%VERBOSE%"=="1" echo [VERBOSE] Running PyInstaller (this may take a while)
 "%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py > "%BUILD_LOG%" 2>&1
 
-if errorlevel 1 (
-  echo PyInstaller build failed.
-  echo --- pyinstaller log ---
-  type "%BUILD_LOG%"
-  exit /b 1
-)
+if %ERRORLEVEL% NEQ 0 echo PyInstaller build failed.& echo --- pyinstaller log ---& type "%BUILD_LOG%"& exit /b 1
 
 echo Build complete. Executable located at dist\AI_Crawler_Assistant_Server.exe
 if "%VERBOSE%"=="1" echo [VERBOSE] Build finished successfully
