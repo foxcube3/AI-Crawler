@@ -130,8 +130,8 @@ if exist AI_Crawler_Assistant_Server.spec del /q AI_Crawler_Assistant_Server.spe
 
 REM Build onefile executable for server.py using venv python
 if "%VERBOSE%"=="1" echo [VERBOSE] Running PyInstaller (this may take a while)
-if "%VERBOSE%"=="1" echo [VERBOSE] Command: "%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py
-cmd.exe /c ""%VENV_PY%" -m pyinstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" %PYI_INSTALLERS% server.py" > "%BUILD_LOG%" 2>&1
+if "%VERBOSE%"=="1" echo [VERBOSE] Command: "%VENV_PY%" -m PyInstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" --collect-data "dateparser" %PYI_INSTALLERS% server.py
+cmd.exe /c ""%VENV_PY%" -m PyInstaller --noconfirm --clean --onefile --name "AI_Crawler_Assistant_Server" --add-data "templates;templates" --add-data "data;data" --collect-data "dateparser" %PYI_INSTALLERS% server.py" > "%BUILD_LOG%" 2>&1
 
 if %ERRORLEVEL% NEQ 0 echo PyInstaller build failed.& echo --- pyinstaller log ---& type "%BUILD_LOG%"& exit /b 1
 
