@@ -47,6 +47,28 @@ Notes:
 - If Python on PATH is a Microsoft Store alias, disable App execution aliases (Settings > Apps > Advanced app settings > App execution aliases) or install Python from python.org.
 - To produce an Inno Setup installer, open `installers\inno_setup\installer.iss` in Inno Setup and compile it after the executable is built.
 
+PowerShell troubleshooting
+- Execution policy prevents scripts:
+  - Fix for current session:
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+- Error: ". was unexpected at this time" when running the batch from PowerShell:
+  - Cause: PowerShell parsing differences with certain cmd.exe chaining.
+  - Fix: Use the wrapper:
+    ./scripts/build_windows.ps1 -Verbose
+    or run via cmd explicitly:
+    cmd.exe /c "scripts\build_windows.bat -v"
+- View detailed build logs written by the batch:
+  - Logs are written to: $env:TEMP\ai_crawler_build.log
+  - Tail the log:
+    Get-Content $env:TEMP\ai_crawler_build.log -Tail 200 -Wait
+- Python not found or Store alias:
+  - Disable App execution aliases for python/python3 (Settings > Apps > Advanced app settings > App execution aliases) or install Python from python.org and ensure it’s on PATH.
+- Clean previous build artifacts if a build fails:
+  Remove-Item -Recurse -Force .\dist, .\build
+  Remove-Item -Force .\AI_Crawler_Assistant_Server.spec
+- Virtual environment notes:
+  - The builder creates and uses .venv automatically; you don’t need to activate it manually.
+
 Usage
 - Search by query and crawl top results:
    python ai_crawler.py --query "large language models retrieval" --max-results 20 --output-dir data
