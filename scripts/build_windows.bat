@@ -56,6 +56,11 @@ if errorlevel 1 (
 )
 
 set "VENV_DIR=.venv"
+REM Remove existing virtual environment to avoid venvlauncher.exe copy issues
+if exist "%VENV_DIR%\Scripts\python.exe" (
+  if "%VERBOSE%"=="1" echo [VERBOSE] Removing existing virtual env at %VENV_DIR%
+  rmdir /s /q "%VENV_DIR%"
+)
 if "%VERBOSE%"=="1" echo [VERBOSE] Creating virtual env at %VENV_DIR%
 call %PY_CMD% -m venv "%VENV_DIR%"
 if errorlevel 1 (
