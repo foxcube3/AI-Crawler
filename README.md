@@ -30,8 +30,8 @@ Option A (PowerShell, recommended):
 2. If you see an execution policy warning, allow scripts for this session:
    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 3. Run the PowerShell wrapper, which forwards args to the batch script and streams output:
-   ./scripts/build_windows.ps1 -Verbose
-   (You can omit -Verbose if you prefer)
+   ./scripts/build_windows.ps1 -BuildVerbose
+   (You can omit -BuildVerbose if you prefer)
 
 Option B (Command Prompt - cmd.exe):
 1. Open Command Prompt in the project root.
@@ -54,7 +54,7 @@ PowerShell troubleshooting
 - Error: ". was unexpected at this time" when running the batch from PowerShell:
   - Cause: PowerShell parsing differences with certain cmd.exe chaining.
   - Fix: Use the wrapper:
-    ./scripts/build_windows.ps1 -Verbose
+    ./scripts/build_windows.ps1 -BuildVerbose
     or run via cmd explicitly:
     cmd.exe /c "scripts\build_windows.bat -v"
 - View detailed build logs written by the batch:
